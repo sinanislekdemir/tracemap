@@ -11,14 +11,14 @@ React + TypeScript frontend, packaged as a single native binary.
 
 ## Screenshots
 
-![Single trace](docs/screenshots/trace.png)
+<img width="1827" height="1047" alt="image" src="https://github.com/user-attachments/assets/7c2936ef-f6d0-4ddc-8113-8767712c2026" />
+
 *Tracing a host: live hop list, per-hop RTT/ASN, and the path drawn on the map.*
+<img width="2109" height="1160" alt="image" src="https://github.com/user-attachments/assets/40c55a08-f2dd-472d-bf61-3d126213fdcf" />
 
-| Advanced scan | History browser |
-| --- | --- |
-| ![Advanced scan](docs/screenshots/scan.png) | ![History](docs/screenshots/history.png) |
 
-![Multi-trace comparison](docs/screenshots/compare.png)
+<img width="2109" height="1160" alt="image" src="https://github.com/user-attachments/assets/89df3ba7-79c8-40ac-b2e6-5867a9a504a2" />
+
 *Loading several saved traces at once; hops shared by two or more paths are
 highlighted as correlation points.*
 

@@ -264,37 +264,6 @@ func TestRateLimiterDisabled(t *testing.T) {
 	}
 }
 
-func TestIsWritable(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root bypasses permission checks")
-	}
-	if !isWritable(t.TempDir()) {
-		t.Error("expected a temp dir to be writable")
-	}
-
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	if isWritable(dir) {
-		t.Error("expected a read-only dir to be unwritable")
-	}
-}
-
-func TestDefaultStorePathEnvOverride(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "custom.db")
-	t.Setenv("TRACEROUTE_GEOIP_CACHE", path)
-	if got := defaultStorePath(); got != path {
-		t.Errorf("defaultStorePath = %q, want %q", got, path)
-	}
-
-	t.Setenv("TRACEROUTE_GEOIP_CACHE", "off")
-	if got := defaultStorePath(); got != "" {
-		t.Errorf("defaultStorePath = %q, want empty when disabled", got)
-	}
-}
-
 func TestFindDBEnvOverride(t *testing.T) {
 	path := filepath.Join(t.TempDir(), cityDBName)
 	if err := os.WriteFile(path, []byte("stub"), 0o644); err != nil {

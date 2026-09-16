@@ -34,6 +34,7 @@ internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP -> geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS lookup -> trace targets
 internal/history/           saved traces/scans (SQLite snapshot store)
+internal/appdata/           shared SQLite database path (tracemap.db)
 frontend/src/               React app
 frontend/wailsjs/           generated bindings — do not edit by hand
 build/                      Wails build assets (appicon.png, platform files)
@@ -61,14 +62,15 @@ PLAN.md                     design/architecture document
   cache → `ipwho.is` (source of truth, throttled to 2 req/s) → local GeoLite2
   `.mmdb` fallback. Only remote replies are cached. Local hits without
   coordinates are treated as misses.
-- **Cache location**: `geo-cache.db` next to the binary, falling back to
-  `~/.cache/traceroute/` when that directory is not writable. Env overrides:
-  `TRACEROUTE_GEOIP_CACHE` (`off` disables), `TRACEROUTE_GEOIP_CITY_DB`,
-  `TRACEROUTE_GEOIP_ASN_DB`, `TRACEROUTE_GEOIP_DIR`.
+- **Database location** (`internal/appdata`): a single `tracemap.db` holds both
+  the `geo_cache` and `history_entry` tables. Written next to the binary,
+  falling back to `~/.cache/traceroute/` when that directory is not writable.
+  Env override `TRACEROUTE_DB` (`off` disables all persistence). GeoLite2
+  paths: `TRACEROUTE_GEOIP_CITY_DB`, `TRACEROUTE_GEOIP_ASN_DB`,
+  `TRACEROUTE_GEOIP_DIR`.
 - **History** (`internal/history`): explicit snapshots of completed traces/scans
-  in `history.db` (JSON blob per entry + denormalized counts), stored next to the
-  binary or in `~/.cache/traceroute/`. Env override `TRACEROUTE_HISTORY_DB`
-  (`off` disables). Bound methods: `SaveHistory`, `ListHistory`, `LoadHistory`,
+  in the shared `tracemap.db` (JSON blob per entry + denormalized counts).
+  Bound methods: `SaveHistory`, `ListHistory`, `LoadHistory`,
   `DeleteHistory`, `ClearHistory`. The frontend builds the snapshot (it holds the
   async geo results); nothing is saved automatically.
 - **Shared-hop correlation** is computed in the frontend (`App.tsx`): IPs present

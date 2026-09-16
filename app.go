@@ -11,6 +11,7 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"traceroute/internal/appdata"
 	"traceroute/internal/dnscheck"
 	"traceroute/internal/geolocator"
 	"traceroute/internal/history"
@@ -114,7 +115,7 @@ func NewApp() *App {
 		geo:    geolocator.NewResolver(),
 	}
 
-	store, err := history.Open(history.DefaultPath())
+	store, err := history.Open(appdata.DefaultPath())
 	switch {
 	case err != nil:
 		log.Printf("history: unavailable: %v", err)

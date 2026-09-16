@@ -183,16 +183,3 @@ func TestDisabledStore(t *testing.T) {
 		t.Errorf("Load on disabled store = %v, %v; want empty", entries, err)
 	}
 }
-
-func TestDefaultPathEnvOverride(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "custom.db")
-	t.Setenv("TRACEROUTE_HISTORY_DB", path)
-	if got := DefaultPath(); got != path {
-		t.Errorf("DefaultPath = %q, want %q", got, path)
-	}
-
-	t.Setenv("TRACEROUTE_HISTORY_DB", "off")
-	if got := DefaultPath(); got != "" {
-		t.Errorf("DefaultPath = %q, want empty when disabled", got)
-	}
-}

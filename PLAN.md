@@ -57,24 +57,25 @@ Go backend (in-process)
   `App.Trace` forwards to the frontend as a `trace:hop` event.
 - **GeoIP resolution** (`internal/geolocator`): resolve each responsive hop IP,
   preferring the public `ipwho.is` API (the source of truth), rate limited to
-  2 requests/second. Replies are kept in a persistent SQLite cache next to the
-  binary (`geo-cache.db`), falling back to the user cache directory when that
-  directory is not writable, so repeated hops are served instantly. When the
-  remote service fails, a local **GeoLite2** database (`GeoLite2-City.mmdb` +
-  `GeoLite2-ASN.mmdb`, auto-detected under `/usr/share/GeoIP` and friends) is
-  used instead. Overrides: `TRACEROUTE_GEOIP_CACHE` (`off` disables),
-  `TRACEROUTE_GEOIP_CITY_DB`, `TRACEROUTE_GEOIP_ASN_DB`,
-  `TRACEROUTE_GEOIP_DIR`. Lookups run in background goroutines and emit
-  `trace:geo`, so geo never blocks the trace. Private/loopback addresses are
-  reported as unresolved without a lookup.
+  2 requests/second. Replies are kept in a persistent SQLite cache
+  (`geo_cache` table in `tracemap.db`), so repeated hops are served instantly.
+  When the remote service fails, a local **GeoLite2** database
+  (`GeoLite2-City.mmdb` + `GeoLite2-ASN.mmdb`, auto-detected under
+  `/usr/share/GeoIP` and friends) is used instead. Overrides:
+  `TRACEROUTE_GEOIP_CITY_DB`, `TRACEROUTE_GEOIP_ASN_DB`, `TRACEROUTE_GEOIP_DIR`.
+  Lookups run in background goroutines and emit `trace:geo`, so geo never blocks
+  the trace. Private/loopback addresses are reported as unresolved without a
+  lookup.
 - **Input validation**: strictly validate the target (hostname/IP regex) to
   prevent command injection — args are passed as an array via `os/exec`, never
   interpolated into a shell string.
+- **Database** (`internal/appdata`): one `tracemap.db` next to the binary (else
+  the user cache directory) holds both the `geo_cache` and `history_entry`
+  tables; `TRACEROUTE_DB` overrides the path, `off` disables persistence.
 - **History** (`internal/history`): explicit snapshots of completed traces/scans
-  in a SQLite database (`history.db` next to the binary, else the user cache
-  directory; `TRACEROUTE_HISTORY_DB`, `off` disables). Each entry stores the
-  trace snapshot as JSON alongside denormalized trace/hop counts. The frontend
-  supplies the snapshot because it owns the asynchronously resolved geo data.
+  in the shared `tracemap.db`. Each entry stores the trace snapshot as JSON
+  alongside denormalized trace/hop counts. The frontend supplies the snapshot
+  because it owns the asynchronously resolved geo data.
 - **Cancellation**: `App.Cancel` cancels the running trace's context.
 
 ### 3.2 Frontend (React + TypeScript)

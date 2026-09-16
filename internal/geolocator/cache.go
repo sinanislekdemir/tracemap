@@ -94,39 +94,3 @@ func (s *geoStore) put(ctx context.Context, ip string, data GeoData) {
 func (s *geoStore) Close() error {
 	return s.db.Close()
 }
-
-// defaultStorePath returns the cache location: next to the running binary, or
-// the user cache directory when that directory is not writable.
-// TRACEROUTE_GEOIP_CACHE overrides it; "off" or "none" disables the cache.
-func defaultStorePath() string {
-	if path := os.Getenv("TRACEROUTE_GEOIP_CACHE"); path != "" {
-		if path == "off" || path == "none" {
-			return ""
-		}
-		return path
-	}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		if isWritable(dir) {
-			return filepath.Join(dir, "geo-cache.db")
-		}
-	}
-	if dir, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(dir, "traceroute", "geo-cache.db")
-	}
-	return ""
-}
-
-// isWritable reports whether dir accepts new files, by creating and removing a
-// temporary file. This catches read-only mounts and permission denials that a
-// simple mode check would miss.
-func isWritable(dir string) bool {
-	file, err := os.CreateTemp(dir, ".geo-cache-probe-*")
-	if err != nil {
-		return false
-	}
-	name := file.Name()
-	_ = file.Close()
-	_ = os.Remove(name)
-	return true
-}

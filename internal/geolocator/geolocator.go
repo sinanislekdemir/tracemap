@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/oschwald/maxminddb-golang"
+
+	"traceroute/internal/appdata"
 )
 
 // GeoData is the resolved geographic information for an IP address.
@@ -59,7 +61,7 @@ func NewResolver() *Resolver {
 		r.closers = append(r.closers, local)
 	}
 
-	store, err := openStore(defaultStorePath())
+	store, err := openStore(appdata.DefaultPath())
 	switch {
 	case err != nil:
 		log.Printf("geolocator: cache unavailable: %v", err)

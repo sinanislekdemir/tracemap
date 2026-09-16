@@ -139,14 +139,14 @@ All configuration is via environment variables.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `TRACEROUTE_GEOIP_CACHE` | `geo-cache.db` | Geolocation cache path; `off` disables it. |
+| `TRACEROUTE_DB` | `tracemap.db` | SQLite database holding the geo cache and history; `off` disables persistence. |
 | `TRACEROUTE_GEOIP_CITY_DB` | auto-detected | Path to `GeoLite2-City.mmdb`. |
 | `TRACEROUTE_GEOIP_ASN_DB` | auto-detected | Path to `GeoLite2-ASN.mmdb`. |
 | `TRACEROUTE_GEOIP_DIR` | `/usr/share/GeoIP` etc. | Directory to search for GeoLite2 databases. |
-| `TRACEROUTE_HISTORY_DB` | `history.db` | History database path; `off` disables it. |
 
-Both databases are written **next to the binary** when that directory is
-writable, otherwise under `~/.cache/traceroute/`.
+The database is written **next to the binary** when that directory is
+writable, otherwise under `~/.cache/traceroute/`. It contains two tables:
+`geo_cache` (geolocation replies) and `history_entry` (saved traces/scans).
 
 Geolocation resolution order: in-memory cache → SQLite cache → `ipwho.is`
 (source of truth, throttled to 2 req/s) → local GeoLite2 `.mmdb` fallback.

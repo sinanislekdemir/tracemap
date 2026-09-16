@@ -251,39 +251,3 @@ func countHops(traces []Trace) int {
 	}
 	return total
 }
-
-// DefaultPath returns the history database location: next to the running
-// binary, or the user cache directory when that directory is not writable.
-// TRACEROUTE_HISTORY_DB overrides it; "off" or "none" disables history.
-func DefaultPath() string {
-	if path := os.Getenv("TRACEROUTE_HISTORY_DB"); path != "" {
-		if path == "off" || path == "none" {
-			return ""
-		}
-		return path
-	}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		if isWritable(dir) {
-			return filepath.Join(dir, "history.db")
-		}
-	}
-	if dir, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(dir, "traceroute", "history.db")
-	}
-	return ""
-}
-
-// isWritable reports whether dir accepts new files, by creating and removing a
-// temporary file. This catches read-only mounts and permission denials that a
-// simple mode check would miss.
-func isWritable(dir string) bool {
-	file, err := os.CreateTemp(dir, ".history-probe-*")
-	if err != nil {
-		return false
-	}
-	name := file.Name()
-	_ = file.Close()
-	_ = os.Remove(name)
-	return true
-}

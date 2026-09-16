@@ -4,3 +4,4 @@ frontend/dist
 frontend/package.json.md5
 geo-cache.db
 history.db
+tracemap.db

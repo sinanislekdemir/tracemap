@@ -167,3 +167,7 @@ make check
   `exec` as an argument array — user input is never interpolated into a shell
   string.
 - No secrets or credentials are stored; all data stays in local SQLite files.
+
+## License
+
+[MIT](LICENSE) © 2026 Sinan Islekdemir

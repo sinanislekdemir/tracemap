@@ -19,19 +19,16 @@ jobs:
         include:
           - name: linux-amd64
             os: ubuntu-latest
-            shell: bash
             build: wails build -tags webkit2_41
             package: tar -czf "tracemap-${GITHUB_REF_NAME}-linux-amd64.tar.gz" -C build/bin traceroute
           - name: darwin-universal
             os: macos-latest
-            shell: bash
             build: wails build -platform darwin/universal
             package: ditto -c -k --keepParent build/bin/traceroute.app "tracemap-${GITHUB_REF_NAME}-darwin-universal.zip"
           - name: windows-amd64
             os: windows-latest
-            shell: pwsh
             build: wails build
-            package: Compress-Archive -Path ./build/bin/traceroute.exe -DestinationPath "tracemap-$env:GITHUB_REF_NAME-windows-amd64.zip" -Force
+            package: powershell -NoProfile -Command "Compress-Archive -Path ./build/bin/traceroute.exe -DestinationPath 'tracemap-${GITHUB_REF_NAME}-windows-amd64.zip' -Force"
 
     steps:
       - name: Checkout
@@ -63,11 +60,11 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Build
-        shell: ${{ matrix.shell }}
+        shell: bash
         run: ${{ matrix.build }}
 
       - name: Package
-        shell: ${{ matrix.shell }}
+        shell: bash
         run: ${{ matrix.package }}
 
       - name: Upload artifact

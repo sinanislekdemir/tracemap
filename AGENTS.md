@@ -37,6 +37,7 @@ internal/history/           saved traces/scans (SQLite snapshot store)
 frontend/src/               React app
 frontend/wailsjs/           generated bindings — do not edit by hand
 build/                      Wails build assets (appicon.png, platform files)
+.github/workflows/          CI (make check) + tag-triggered release builds
 PLAN.md                     design/architecture document
 ```
 

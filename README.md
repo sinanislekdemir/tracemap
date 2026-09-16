@@ -1,5 +1,7 @@
 # tracemap
 
+[![CI](https://github.com/sinanislekdemir/tracemap/actions/workflows/ci.yml/badge.svg)](https://github.com/sinanislekdemir/tracemap/actions/workflows/ci.yml)
+
 **A desktop traceroute visualizer.** tracemap runs `traceroute`/`tracert` from
 your own machine, geolocates every responsive hop, and draws the path on an
 interactive world map. It can resolve a domain's DNS records and trace every
@@ -37,6 +39,21 @@ highlighted as correlation points.*
 - **Cancel** — abort a running trace or scan at any time.
 - **Offline-friendly** — an optional local GeoLite2 database is used as a
   fallback when the remote geolocation service is unavailable.
+
+## Platforms
+
+Prebuilt binaries are attached to each tagged release:
+
+| OS | Architecture | Artifact |
+| --- | --- | --- |
+| Linux | x86_64 | `tracemap-<version>-linux-amd64.tar.gz` |
+| macOS | Universal (Intel + Apple Silicon) | `tracemap-<version>-darwin-universal.zip` |
+| Windows | x86_64 | `tracemap-<version>-windows-amd64.zip` |
+
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds each
+target on its native runner and publishes a GitHub release. Wails apps cannot
+be cross-compiled, so every platform is built on its own runner. CI
+(`.github/workflows/ci.yml`) runs `make check` on every push and pull request.
 
 ## How it works
 

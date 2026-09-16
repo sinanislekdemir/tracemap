@@ -85,7 +85,9 @@ concurrent traces (`0` is the single-trace view; a scan assigns `1..N`).
 - **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
 - **Linux system packages** (Fedora): `gcc-c++ gtk3-devel webkit2gtk4.1-devel`
   - Debian/Ubuntu: `gcc g++ libgtk-3-dev libwebkit2gtk-4.1-dev`
-- A system `traceroute` (Linux/macOS) or `tracert` (Windows) binary.
+- A system traceroute tool: `traceroute` (Linux/macOS), or a fallback of
+  `tracepath`/`mtr`; Windows ships `tracert`. tracemap discovers the first one
+  available on `PATH` or at conventional install locations.
 
 Run `make sysdeps` to verify the Linux build/runtime dependencies.
 

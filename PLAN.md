@@ -46,10 +46,13 @@ Go backend (in-process)
 ```
 
 ### 3.1 Backend (Go)
-- **Traceroute execution** (`internal/tracerouter`): spawn the OS `traceroute`
-  (Linux/macOS) or `tracert` (Windows) with `-n`/`-d` (no DNS) for speed and
-  stable parsing. Parse hop number, IP and RTT(s). Max-hops and timeout are
-  configurable (default 30 hops, 30s budget).
+- **Traceroute execution** (`internal/tracerouter`): discover the first
+  available tool — `traceroute`, then `tracepath`, then `mtr` on Unix;
+  `tracert` on Windows — on `PATH` or at conventional absolute paths, and build
+  tool-specific flags (numeric output for speed and stable parsing). The parser
+  auto-detects traceroute/tracert/tracepath/mtr formats and merges tracepath's
+  repeated per-probe lines. Max-hops and timeout are configurable (default 30
+  hops, 30s budget).
 - **Streaming**: `ExecuteStream` invokes a callback per parsed hop line, which
   `App.Trace` forwards to the frontend as a `trace:hop` event.
 - **GeoIP resolution** (`internal/geolocator`): resolve each responsive hop IP,

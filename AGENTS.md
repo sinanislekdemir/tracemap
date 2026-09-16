@@ -52,6 +52,11 @@ PLAN.md                     design/architecture document
   `scan:records` then `scan:targets`, trace each address with bounded
   concurrency (`scanConcurrency`), then `scan:done`. IPv6 targets are dropped
   when the host has no global IPv6 address (`filterUnroutable`).
+- **Traceroute tool discovery** (`internal/tracerouter`): picks the first of
+  `traceroute`, `tracepath`, `mtr` (Unix) or `tracert` (Windows) found on `PATH`
+  or at conventional absolute paths, then builds tool-specific flags. The parser
+  auto-detects traceroute/tracert/tracepath/mtr line formats and merges
+  tracepath's repeated per-probe lines. Set `Runner.Binary` to override.
 - **Geo resolution order** (`internal/geolocator`): in-memory cache → SQLite
   cache → `ipwho.is` (source of truth, throttled to 2 req/s) → local GeoLite2
   `.mmdb` fallback. Only remote replies are cached. Local hits without

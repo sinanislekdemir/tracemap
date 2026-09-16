@@ -50,6 +50,40 @@ func TestParse(t *testing.T) {
 			input:    "traceroute to x\nsome note 1 ms\n",
 			expected: nil,
 		},
+		{
+			name: "tracepath output merges repeated probes",
+			input: " 1?: [LOCALHOST]                      pmtu 1500\n" +
+				" 1:  192.168.1.1                       0.282ms \n" +
+				" 1:  192.168.1.1                       0.270ms \n" +
+				" 2:  10.0.0.1                          1.234ms asymm 3\n" +
+				" 3:  no reply\n",
+			expected: []Hop{
+				{Number: 1, IP: "192.168.1.1", RTTs: []time.Duration{282 * time.Microsecond, 270 * time.Microsecond}},
+				{Number: 2, IP: "10.0.0.1", RTTs: []time.Duration{1234 * time.Microsecond}},
+				{Number: 3},
+			},
+		},
+		{
+			name: "tracepath keeps a later address for the same hop",
+			input: " 1?: [LOCALHOST]                      pmtu 1500\n" +
+				" 1:  192.168.1.1                       0.282ms \n",
+			expected: []Hop{
+				{Number: 1, IP: "192.168.1.1", RTTs: []time.Duration{282 * time.Microsecond}},
+			},
+		},
+		{
+			name: "mtr report output",
+			input: "Start: 2026-09-16T00:00:00+0000\n" +
+				"HOST: host                          Loss%   Snt   Last   Avg  Best  Wrst StDev\n" +
+				"  1.|-- 192.168.1.1                  0.0%     1    0.3   0.3   0.3   0.3   0.0\n" +
+				"  2.|-- 10.0.0.1                     0.0%     1    5.0   5.0   5.0   5.0   0.0\n" +
+				"  3.|-- ???                        100.0     1    0.0   0.0   0.0   0.0   0.0\n",
+			expected: []Hop{
+				{Number: 1, IP: "192.168.1.1", RTTs: []time.Duration{300 * time.Microsecond}},
+				{Number: 2, IP: "10.0.0.1", RTTs: []time.Duration{5 * time.Millisecond}},
+				{Number: 3},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -74,6 +108,70 @@ func TestParse(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestToolFromBinary(t *testing.T) {
+	tests := map[string]tool{
+		"traceroute":                      toolTraceroute,
+		"/usr/bin/traceroute":             toolTraceroute,
+		"fake-traceroute":                 toolTraceroute,
+		"tracert":                         toolTracert,
+		"tracert.exe":                     toolTracert,
+		`C:\Windows\System32\tracert.exe`: toolTracert,
+		"/usr/bin/tracepath":              toolTracepath,
+		"mtr":                             toolMtr,
+		"/usr/local/sbin/mtr":             toolMtr,
+	}
+	for path, want := range tests {
+		if got := toolFromBinary(path); got != want {
+			t.Errorf("toolFromBinary(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+func TestArgsFor(t *testing.T) {
+	const (
+		maxHops = 30
+		timeout = 30 * time.Second
+	)
+	tests := []struct {
+		name    string
+		tool    tool
+		resolve bool
+		want    []string
+	}{
+		{"traceroute", toolTraceroute, false, []string{"-n", "-m", "30", "-w", "10", "-q", "3"}},
+		{"traceroute names", toolTraceroute, true, []string{"-m", "30", "-w", "10", "-q", "3"}},
+		{"tracert", toolTracert, false, []string{"-d", "-h", "30", "-w", "10000"}},
+		{"tracert names", toolTracert, true, []string{"-h", "30", "-w", "10000"}},
+		{"tracepath", toolTracepath, false, []string{"-n", "-m", "30"}},
+		{"tracepath names", toolTracepath, true, []string{"-m", "30"}},
+		{"mtr", toolMtr, false, []string{"-n", "-r", "-c", "1", "-m", "30"}},
+		{"mtr names", toolMtr, true, []string{"-r", "-c", "1", "-m", "30"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := argsFor(tt.tool, maxHops, tt.resolve, timeout)
+			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
+				t.Errorf("argsFor = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCandidatesFor(t *testing.T) {
+	windows := candidatesFor("windows")
+	if len(windows) == 0 || windows[0].name != "tracert" {
+		t.Errorf("windows candidates = %+v, want tracert first", windows)
+	}
+
+	unix := candidatesFor("linux")
+	if len(unix) != 3 {
+		t.Fatalf("linux candidates = %+v, want 3", unix)
+	}
+	if unix[0].name != "traceroute" || unix[1].name != "tracepath" || unix[2].name != "mtr" {
+		t.Errorf("linux candidate order = %q, %q, %q", unix[0].name, unix[1].name, unix[2].name)
 	}
 }
 

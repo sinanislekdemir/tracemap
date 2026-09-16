@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -99,6 +101,7 @@ func (r *Runner) ExecuteStream(ctx context.Context, target string, opts Options,
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	parser := &hopParser{onHop: onHop}
 	targetSeen := false
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -109,12 +112,9 @@ func (r *Runner) ExecuteStream(ctx context.Context, target string, opts Options,
 				continue
 			}
 		}
-		hop, ok := parseHopLine(line)
-		if !ok {
-			continue
-		}
-		onHop(hop)
+		parser.feed(line)
 	}
+	parser.flush()
 
 	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
@@ -156,30 +156,149 @@ func (r *Runner) build(target string, opts Options) (binary string, args []strin
 
 	binary = r.Binary
 	if binary == "" {
-		if runtime.GOOS == "windows" {
-			binary = "tracert"
-		} else {
-			binary = "traceroute"
+		binary, err = discoverBinary(runtime.GOOS)
+		if err != nil {
+			return "", nil, 0, err
 		}
 	}
 
-	if runtime.GOOS == "windows" {
-		// -d: do not resolve addresses, -h: max hops, -w: per-probe timeout (ms).
-		args = []string{"-d", "-h", strconv.Itoa(maxHops), "-w", strconv.Itoa(probeTimeoutMS(timeout))}
-		if opts.ResolveNames {
-			args = args[1:] // drop -d when reverse lookups are wanted
-		}
-	} else {
-		// -n: do not resolve addresses, -m: max hops, -w: per-probe wait (seconds),
-		// -q: probes per hop.
-		args = []string{"-n", "-m", strconv.Itoa(maxHops), "-w", strconv.Itoa(probeTimeoutSeconds(timeout)), "-q", "3"}
-		if opts.ResolveNames {
-			args = args[1:] // drop -n when reverse lookups are wanted
-		}
-	}
+	args = argsFor(toolFromBinary(binary), maxHops, opts.ResolveNames, timeout)
 	args = append(args, target)
 
 	return binary, args, timeout, nil
+}
+
+// tool identifies which traceroute implementation a binary is, so the right
+// flags and output format can be used.
+type tool int
+
+const (
+	toolTraceroute tool = iota
+	toolTracert
+	toolTracepath
+	toolMtr
+)
+
+// binaryCandidate is one executable to look for, by name on PATH and by
+// explicit absolute path. The absolute paths matter for GUI apps launched from
+// a desktop entry, whose PATH is often minimal and omits /usr/sbin.
+type binaryCandidate struct {
+	name  string
+	paths []string
+}
+
+// discoverBinary finds a usable traceroute tool for goos, preferring the
+// canonical traceroute/tracert and falling back to tracepath or mtr.
+func discoverBinary(goos string) (string, error) {
+	candidates := candidatesFor(goos)
+	for _, candidate := range candidates {
+		if path, err := exec.LookPath(candidate.name); err == nil {
+			return path, nil
+		}
+		for _, path := range candidate.paths {
+			if isExecutable(path) {
+				return path, nil
+			}
+		}
+	}
+
+	names := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		names = append(names, candidate.name)
+	}
+	return "", fmt.Errorf("no traceroute tool found: install one of %s", strings.Join(names, ", "))
+}
+
+// candidatesFor lists the tools to try, in priority order.
+func candidatesFor(goos string) []binaryCandidate {
+	if goos == "windows" {
+		var paths []string
+		if root := os.Getenv("SystemRoot"); root != "" {
+			paths = append(paths, filepath.Join(root, "System32", "tracert.exe"))
+		}
+		return []binaryCandidate{{name: "tracert", paths: paths}}
+	}
+	return []binaryCandidate{
+		{name: "traceroute", paths: unixPaths("traceroute")},
+		{name: "tracepath", paths: unixPaths("tracepath")},
+		{name: "mtr", paths: unixPaths("mtr")},
+	}
+}
+
+// unixPaths returns the conventional install locations for a Unix tool.
+func unixPaths(name string) []string {
+	return []string{
+		"/usr/bin/" + name,
+		"/bin/" + name,
+		"/usr/sbin/" + name,
+		"/sbin/" + name,
+		"/usr/local/bin/" + name,
+		"/usr/local/sbin/" + name,
+	}
+}
+
+// toolFromBinary infers the implementation from the executable's base name.
+// Both path separators are handled so the detection is testable regardless of
+// the host platform.
+func toolFromBinary(path string) tool {
+	base := path
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
+	base = strings.TrimSuffix(strings.ToLower(base), ".exe")
+	switch {
+	case base == "tracert":
+		return toolTracert
+	case base == "tracepath":
+		return toolTracepath
+	case base == "mtr":
+		return toolMtr
+	default:
+		return toolTraceroute
+	}
+}
+
+// argsFor builds the probe arguments for a tool. maxHops, the optional
+// per-probe wait and the probe count are expressed with each tool's own flags.
+func argsFor(t tool, maxHops int, resolveNames bool, timeout time.Duration) []string {
+	switch t {
+	case toolTracert:
+		args := []string{"-h", strconv.Itoa(maxHops), "-w", strconv.Itoa(probeTimeoutMS(timeout))}
+		if !resolveNames {
+			args = append([]string{"-d"}, args...)
+		}
+		return args
+	case toolTracepath:
+		args := []string{"-m", strconv.Itoa(maxHops)}
+		if !resolveNames {
+			args = append([]string{"-n"}, args...)
+		}
+		return args
+	case toolMtr:
+		args := []string{"-r", "-c", "1", "-m", strconv.Itoa(maxHops)}
+		if !resolveNames {
+			args = append([]string{"-n"}, args...)
+		}
+		return args
+	default: // traceroute
+		args := []string{"-m", strconv.Itoa(maxHops), "-w", strconv.Itoa(probeTimeoutSeconds(timeout)), "-q", "3"}
+		if !resolveNames {
+			args = append([]string{"-n"}, args...)
+		}
+		return args
+	}
+}
+
+// isExecutable reports whether path is an existing, executable file.
+func isExecutable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode()&0o111 != 0
 }
 
 func probeTimeoutSeconds(timeout time.Duration) int {

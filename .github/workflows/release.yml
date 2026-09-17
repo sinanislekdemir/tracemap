@@ -121,33 +121,39 @@ jobs:
               --verify-tag
           fi
 
-      # Upload assets one at a time with backoff. The previous parallel uploader
-      # failed the whole job when a single asset hit a transient API error.
+      # Upload assets one at a time with backoff and a per-attempt timeout.
+      # The previous parallel uploader failed the whole job when a single asset
+      # hit a transient API error, and uploads occasionally stall for minutes;
+      # the timeout forces a fresh attempt instead of hanging indefinitely.
       - name: Upload assets
         run: |
           set -uo pipefail
-          failed=0
           shopt -s nullglob
           assets=(artifacts/*)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "::error::No assets found under artifacts/"
             exit 1
           fi
+          failed=0
           for f in "${assets[@]}"; do
             name="$(basename "$f")"
             echo "::group::Uploading $name"
             ok=0
-            for attempt in 1 2 3 4 5; do
-              if gh release upload "$GITHUB_REF_NAME" "$f" --clobber; then
+            for attempt in 1 2 3 4; do
+              start=$SECONDS
+              if timeout --kill-after=20 180 \
+                  gh release upload "$GITHUB_REF_NAME" "$f" --clobber; then
+                echo "Uploaded $name in $((SECONDS - start))s"
                 ok=1
                 break
               fi
+              echo "Attempt $attempt failed for $name after $((SECONDS - start))s"
               delay=$((attempt * 15))
-              echo "Attempt $attempt failed for $name; retrying in ${delay}s..."
+              echo "Retrying in ${delay}s..."
               sleep "$delay"
             done
             if [ "$ok" -ne 1 ]; then
-              echo "::error::Failed to upload $name after 5 attempts"
+              echo "::error::Failed to upload $name after 4 attempts"
               failed=1
             fi
             echo "::endgroup::"

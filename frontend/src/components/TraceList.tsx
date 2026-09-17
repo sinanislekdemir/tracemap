@@ -1,12 +1,14 @@
+import type { MouseEvent } from 'react';
 import type { TraceState } from '../types';
 
 interface TraceListProps {
   traces: TraceState[];
   selected: Set<number>;
   onToggle: (id: number) => void;
+  onContextMenu?: (event: MouseEvent, trace: TraceState) => void;
 }
 
-const TraceList = ({ traces, selected, onToggle }: TraceListProps) => (
+const TraceList = ({ traces, selected, onToggle, onContextMenu }: TraceListProps) => (
   <>
     {traces.map((trace) => {
       const isSelected = selected.has(trace.id);
@@ -19,7 +21,11 @@ const TraceList = ({ traces, selected, onToggle }: TraceListProps) => (
       }
 
       return (
-        <div key={trace.id} className={classes.join(' ')}>
+        <div
+          key={trace.id}
+          className={classes.join(' ')}
+          onContextMenu={(event) => onContextMenu?.(event, trace)}
+        >
           <label className="trace-check">
             <input
               type="checkbox"

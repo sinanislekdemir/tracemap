@@ -33,10 +33,15 @@ highlighted as correlation points.*
   The scan follows `NS` records and the SOA primary nameserver one level deeper,
   resolving each nameserver host's own addresses (recursively, bounded) so
   nameserver infrastructure is traced too.
-- **Subdomain discovery** — the Scan dialog can brute-force 1000 common labels
+- **Subdomain discovery** — the Scan dialog can brute-force 1000+ common labels
   (with wildcard filtering), reverse-resolve (PTR) discovered IPs, sweep `/24`
   netblocks, and extract hosts from SPF/DMARC TXT and SRV records. Results are
   cached locally and can be reviewed and traced selectively.
+- **Port scanning** — right-click a target or hop and choose **Find open ports**.
+  The pure-Go scanner (no nmap) does a TCP connect scan or best-effort UDP
+  probe over common-port presets or a custom range, with randomised port order
+  and jitter to reduce the scan signature. Open ports are optionally identified
+  by banner grab, HTTP request and TLS handshake (server, certificate and ALPN).
 - **Geolocation** — every responsive hop is resolved to coordinates, city,
   country and ASN/ISP, with a persistent cache so repeat hops are instant.
 - **History** — explicitly save completed traces and scans to a local SQLite
@@ -75,14 +80,15 @@ through Wails bindings and runtime events.
 
 ```
 Wails window (React + Leaflet map UI)
-   │  Bind: Trace, Scan, Cancel, SaveHistory, ListHistory, LoadHistory, …
-   │  Events: trace:hop, trace:geo, trace:done, scan:targets, …
+   │  Bind: Trace, Scan, ScanPorts, Cancel, SaveHistory, ListHistory, …
+   │  Events: trace:hop, trace:geo, trace:done, scan:targets, portscan:open, …
    ▼
 Go backend (in-process)
    ├── tracerouter  spawn system traceroute/tracert, parse output
    ├── geolocator   IP → lat/lon, city, country, ASN (remote + SQLite + mmdb)
    ├── dnscheck     A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
    ├── subdomains   local subdomain discovery (brute force, PTR, SPF/SRV)
+   ├── portscan     TCP connect / UDP port scan + banner/HTTP/TLS probing
    └── history      saved traces/scans (SQLite snapshot store)
 ```
 
@@ -125,8 +131,13 @@ make clean        # remove build/bin, frontend/dist
    and whether to auto-trace or review). Each target gets its own colour in the
    legend and hop list. Discovered subdomains appear in the **SUBDOMAINS** pane,
    where you can select which ones to trace.
-3. Press `Esc` or **Cancel** to stop a running operation.
-4. Press **+ History** to save the current view, and **History** to browse
+3. Press **Ports** in the toolbar to scan the target, or right-click a target in
+   the **TARGETS** pane, a hop in the hop list, or a marker on the map and
+   choose **Find open ports**. Pick **Common ports** (Top 20/100/1000) or a
+   **Port range**, choose TCP or UDP, and optionally identify protocols. Open
+   ports stream into the dialog as they are found.
+4. Press `Esc` or **Cancel** to stop a running operation.
+5. Press **+ History** to save the current view, and **History** to browse
    saved entries.
 
 Hops that have no coordinates (private addresses, geolocation misses) stay in
@@ -177,6 +188,7 @@ internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP → geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
+internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
 internal/history/           saved traces/scans (SQLite snapshot store)
 frontend/src/               React app
 frontend/wailsjs/           generated bindings — do not edit by hand
@@ -191,6 +203,8 @@ frontend/wailsjs/           generated bindings — do not edit by hand
 - `geolocator` tests use fake lookups/stores; real-database tests skip when
   absent.
 - `history` tests use a temporary SQLite file — no network.
+- `portscan` tests scan localhost listeners and `httptest` HTTP/TLS servers —
+  no external network.
 
 Run everything with:
 
@@ -203,6 +217,9 @@ make check
 - Targets are strictly validated (`tracerouter.validateTarget`) and passed to
   `exec` as an argument array — user input is never interpolated into a shell
   string.
+- Port scanning dials the host directly from the Go standard library; no shell
+  is involved and only open ports are reported. Scan only hosts you are
+  authorised to test.
 - No secrets or credentials are stored; all data stays in local SQLite files.
 
 ## License

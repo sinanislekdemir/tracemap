@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -16,6 +17,7 @@ import (
 	"traceroute/internal/dnscheck"
 	"traceroute/internal/geolocator"
 	"traceroute/internal/history"
+	"traceroute/internal/portscan"
 	"traceroute/internal/subdomains"
 	"traceroute/internal/tracerouter"
 )
@@ -33,6 +35,10 @@ const (
 	EventScanDone     = "scan:done"
 	EventSubdomains   = "scan:subdomains"
 	EventScanProgress = "scan:progress"
+	EventPortOpen     = "portscan:open"
+	EventPortProgress = "portscan:progress"
+	EventPortDone     = "portscan:done"
+	EventPortError    = "portscan:error"
 )
 
 // scanConcurrency limits how many traces an advanced scan runs at once.
@@ -83,6 +89,33 @@ type ScanProgressEvent struct {
 	Done  int    `json:"done"`
 	Total int    `json:"total"`
 	Found int    `json:"found"`
+}
+
+// PortScanRequest starts a port scan of a host. Either Preset or PortRange
+// selects the ports; PortRange wins when both are set.
+type PortScanRequest struct {
+	Host        string `json:"host"`
+	Protocol    string `json:"protocol"`
+	Preset      string `json:"preset"`
+	PortRange   string `json:"portRange"`
+	Concurrency int    `json:"concurrency"`
+	TimeoutMs   int    `json:"timeoutMs"`
+	Probe       bool   `json:"probe"`
+}
+
+// PortScanProgressEvent reports how many ports have been probed so far.
+type PortScanProgressEvent struct {
+	Host  string `json:"host"`
+	Done  int    `json:"done"`
+	Total int    `json:"total"`
+	Open  int    `json:"open"`
+}
+
+// PortScanDoneEvent marks a port scan complete.
+type PortScanDoneEvent struct {
+	Host    string `json:"host"`
+	Scanned int    `json:"scanned"`
+	Open    int    `json:"open"`
 }
 
 // HistorySaveRequest snapshots a completed trace or scan for later replay. The
@@ -142,6 +175,7 @@ type App struct {
 	geo    *geolocator.Resolver
 	hist   *history.Store
 	subs   *subdomains.Store
+	ports  *portscan.Scanner
 
 	mu     sync.Mutex
 	gen    uint64
@@ -153,6 +187,7 @@ func NewApp() *App {
 	app := &App{
 		runner: tracerouter.NewRunner(),
 		geo:    geolocator.NewResolver(),
+		ports:  portscan.NewScanner(),
 	}
 
 	store, err := history.Open(appdata.DefaultPath())
@@ -351,6 +386,64 @@ func capTargets(targets []dnscheck.Target, limit int) []dnscheck.Target {
 		return targets[:limit]
 	}
 	return targets
+}
+
+// ScanPorts probes a host for open ports, emitting each open port as it is
+// found. Results stream through portscan:open/portscan:progress and finish with
+// portscan:done (or portscan:error).
+func (a *App) ScanPorts(req PortScanRequest) error {
+	ctx, end := a.begin()
+	defer end()
+
+	host := strings.TrimSpace(req.Host)
+	if host == "" {
+		message := "no host to scan"
+		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: message})
+		return errors.New(message)
+	}
+
+	ports, err := resolveScanPorts(req)
+	if err != nil {
+		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: err.Error()})
+		return err
+	}
+
+	var open int64
+	_, err = a.ports.Scan(ctx, host, portscan.Options{
+		Protocol:    req.Protocol,
+		Ports:       ports,
+		Concurrency: req.Concurrency,
+		Timeout:     time.Duration(req.TimeoutMs) * time.Millisecond,
+		Probe:       req.Probe,
+		Jitter:      portscan.DefaultJitter,
+	}, portscan.Observer{
+		OnOpen: func(result portscan.Result) {
+			atomic.AddInt64(&open, 1)
+			runtime.EventsEmit(a.ctx, EventPortOpen, result)
+		},
+		OnProgress: func(done, total, openCount int) {
+			runtime.EventsEmit(a.ctx, EventPortProgress, PortScanProgressEvent{
+				Host: host, Done: done, Total: total, Open: openCount,
+			})
+		},
+	})
+
+	if err != nil && !errors.Is(err, context.Canceled) {
+		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: err.Error()})
+		return err
+	}
+	runtime.EventsEmit(a.ctx, EventPortDone, PortScanDoneEvent{
+		Host: host, Scanned: len(ports), Open: int(atomic.LoadInt64(&open)),
+	})
+	return nil
+}
+
+// resolveScanPorts expands a request into a concrete, validated port list.
+func resolveScanPorts(req PortScanRequest) ([]int, error) {
+	if strings.TrimSpace(req.PortRange) != "" {
+		return portscan.ParsePorts(req.PortRange)
+	}
+	return portscan.PresetPorts(req.Preset)
 }
 
 // Cancel stops the running trace or scan, if any.

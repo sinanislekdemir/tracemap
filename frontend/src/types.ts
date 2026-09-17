@@ -86,6 +86,38 @@ export interface ScanProgressEvent {
   found: number;
 }
 
+export interface PortResult {
+  port: number;
+  protocol: string;
+  service?: string;
+  product?: string;
+  banner?: string;
+  detail?: string;
+  tls?: boolean;
+}
+
+export interface PortScanProgress {
+  host: string;
+  done: number;
+  total: number;
+  open: number;
+}
+
+export interface PortScanDone {
+  host: string;
+  scanned: number;
+  open: number;
+}
+
+export interface PortScanOptions {
+  protocol: 'tcp' | 'udp';
+  preset: 'top20' | 'top100' | 'top1000' | 'custom';
+  portRange: string;
+  concurrency: number;
+  timeoutMs: number;
+  probe: boolean;
+}
+
 export type LogLevel = 'info' | 'ok' | 'warn' | 'error';
 
 export interface LogLine {

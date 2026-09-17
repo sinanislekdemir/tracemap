@@ -1,9 +1,11 @@
+import type { MouseEvent } from 'react';
 import type { HopData } from '../types';
 
 interface HopListProps {
   hops: HopData[];
   selectedHop: number | null;
   onSelectHop: (hop: number) => void;
+  onContextMenu?: (event: MouseEvent, hop: HopData) => void;
   sharedHops?: Map<string, number>;
 }
 
@@ -30,7 +32,7 @@ function rttColor(ms: number, max: number): string {
   return 'var(--err)';
 }
 
-const HopList = ({ hops, selectedHop, onSelectHop, sharedHops }: HopListProps) => {
+const HopList = ({ hops, selectedHop, onSelectHop, onContextMenu, sharedHops }: HopListProps) => {
   if (hops.length === 0) {
     return (
       <div className="empty">
@@ -66,6 +68,7 @@ const HopList = ({ hops, selectedHop, onSelectHop, sharedHops }: HopListProps) =
             type="button"
             className={classes.join(' ')}
             onClick={() => onSelectHop(hop.hop)}
+            onContextMenu={(event) => onContextMenu?.(event, hop)}
           >
             <span className="hop-num">{hop.isTarget ? 'TGT' : String(hop.hop).padStart(2, '0')}</span>
             <span className="hop-main">

@@ -29,11 +29,12 @@ Always run `make check` after changes. Never commit unless asked.
 
 ```
 main.go                     Wails entry; embeds frontend/dist; window options
-app.go                      App struct, bound methods (Trace/Scan/Cancel/History), events
+app.go                      App struct, bound methods (Trace/Scan/ScanPorts/Cancel/History), events
 internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP -> geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS lookup -> trace targets
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
+internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
 internal/history/           saved traces/scans (SQLite snapshot store)
 internal/appdata/           shared SQLite database path (tracemap.db)
 frontend/src/               React app
@@ -75,13 +76,25 @@ PLAN.md                     design/architecture document
   `TRACEROUTE_GEOIP_CITY_DB`, `TRACEROUTE_GEOIP_ASN_DB`,
   `TRACEROUTE_GEOIP_DIR`.
 - **Subdomain discovery** (`internal/subdomains`): local-DNS only. `Discover`
-  detects wildcards, brute-forces the embedded 1000-name `Wordlist`, reverse-
+  detects wildcards, brute-forces the embedded 1000+-name `Wordlist`, reverse-
   resolves discovered IPs (optionally sweeping `/24`s), and extracts hosts from
   SPF/DMARC TXT and SRV records. Bounded concurrency + rate limiter; results are
   cached in the `subdomain` table via `Store` (implements `Cache`). The Scan
   dialog (`ScanOptions`) chooses which techniques run; `App.Scan` emits
   `scan:subdomains`/`scan:progress`, and `App.TraceTargets` traces a reviewed
   selection.
+- **Port scanning** (`internal/portscan`): pure-Go, no nmap. `App.ScanPorts`
+  expands a preset (`top20`/`top100`/`top1000`) or a `ParsePorts` range into a
+  port list, then `Scanner.Scan` probes with bounded concurrency, randomised
+  port order and jitter. TCP uses a connect scan; UDP sends a protocol-specific
+  datagram and reports only replies (best-effort). Optional `Probe` identifies
+  the service by banner grab, HTTP `GET`/`Server` header, or TLS handshake
+  (cert CN/SAN, issuer, ALPN); on unknown ports TLS is tried before HTTP because
+  an HTTP server answers a TLS ClientHello with a misleading plaintext `400`.
+  Events: `portscan:open`, `portscan:progress`, `portscan:done`,
+  `portscan:error`; results are not persisted. `ScanPorts` uses the shared
+  `App.begin()` cancel model, so it cancels (and is cancelled by) other
+  operations.
 - **History** (`internal/history`): explicit snapshots of completed traces/scans
   in the shared `tracemap.db` (JSON blob per entry + denormalized counts).
   Bound methods: `SaveHistory`, `ListHistory`, `LoadHistory`,
@@ -104,6 +117,13 @@ PLAN.md                     design/architecture document
   `viewMode='history'` (exited by running a new trace or the app-bar EXIT).
 - `buildDisplayHops()` (`src/traces.ts`) appends/marks the resolved target IP as
   the final list entry; `isLocated()` treats `(0, 0)` as "no coordinates".
+- **Port scan entry points**: the toolbar **Ports** button opens `PortScanModal`
+  for the current target. The right-click context menu (`ContextMenu.tsx`, a
+  generic cursor menu raised by `HopList`, `TraceList` and the map markers)
+  offers **Find open ports** for a specific IP. The modal goes options → live
+  results, owns its own `portscan:*` subscriptions, and streams results in
+  place. Do not add a `window` `contextmenu` listener to close the menu — it can
+  fire for the same event that opened it; `pointerdown`/`blur`/`Escape` suffice.
 - After adding or renaming a bound Go method, run `make bindings` or the
   frontend imports will not compile.
 
@@ -115,9 +135,13 @@ PLAN.md                     design/architecture document
 - `geolocator` tests use fake lookups/stores; real-DB tests skip when absent.
 - `history` tests use a temp-file SQLite store; no network.
 - `subdomains` tests use a fake resolver and a temp SQLite cache; no network.
+- `portscan` tests scan localhost listeners and `httptest` HTTP/TLS servers; no
+  external network. `Scanner.DialContext`/`ResolveIP` can be faked.
 - Keep tests deterministic and offline.
 
 ## Security
 
 - Never interpolate user input into a shell string. Targets are validated by
   `tracerouter.validateTarget` and passed to `exec` as an argument array.
+- Port scanning dials the host from the Go standard library only (no shell); it
+  reports only open ports and never sends credentials.

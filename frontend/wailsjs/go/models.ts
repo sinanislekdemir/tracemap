@@ -207,6 +207,30 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class PortScanRequest {
+	    host: string;
+	    protocol: string;
+	    preset: string;
+	    portRange: string;
+	    concurrency: number;
+	    timeoutMs: number;
+	    probe: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PortScanRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.host = source["host"];
+	        this.protocol = source["protocol"];
+	        this.preset = source["preset"];
+	        this.portRange = source["portRange"];
+	        this.concurrency = source["concurrency"];
+	        this.timeoutMs = source["timeoutMs"];
+	        this.probe = source["probe"];
+	    }
+	}
 	export class ScanOptions {
 	    expandNs: boolean;
 	    bruteForce: boolean;

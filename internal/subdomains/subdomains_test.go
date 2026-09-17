@@ -185,8 +185,8 @@ func TestContextCancellation(t *testing.T) {
 }
 
 func TestWordlist(t *testing.T) {
-	if len(Wordlist) != 1000 {
-		t.Fatalf("Wordlist has %d entries, want 1000", len(Wordlist))
+	if len(Wordlist) < 1000 {
+		t.Fatalf("Wordlist has %d entries, want at least 1000", len(Wordlist))
 	}
 	pattern := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	seen := make(map[string]bool, len(Wordlist))

@@ -30,6 +30,10 @@ export function Scan(arg1) {
   return window['go']['main']['App']['Scan'](arg1);
 }
 
+export function ScanPorts(arg1) {
+  return window['go']['main']['App']['ScanPorts'](arg1);
+}
+
 export function Trace(arg1) {
   return window['go']['main']['App']['Trace'](arg1);
 }

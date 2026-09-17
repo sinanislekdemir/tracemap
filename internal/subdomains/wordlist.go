@@ -1,9 +1,12 @@
 package subdomains
 
 // Wordlist is the embedded set of common subdomain labels used for
-// brute-force discovery. It holds exactly 1000 unique, lowercase labels.
+// brute-force discovery. It holds at least 1000 unique, lowercase labels.
 var Wordlist = []string{
 	"www",
+	"direct",
+	"home",
+	"fs",
 	"mail",
 	"smtp",
 	"pop",

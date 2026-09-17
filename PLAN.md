@@ -17,12 +17,16 @@ OpenStreetMap map.
   `NS` records and the SOA primary nameserver are expanded recursively (bounded)
   so nameserver hostnames and their addresses become trace targets too.
 - **Subdomain discovery** (local DNS only): a scan-options dialog controls
-  brute force (embedded 1000-name wordlist, wildcard-filtered), reverse DNS
+  brute force (embedded 1000+-name wordlist, wildcard-filtered), reverse DNS
   (PTR, optional `/24` sweep), and SPF/DMARC/SRV extraction. Results are cached
   and can be reviewed and traced selectively.
 - **History**: explicitly save completed traces/scans to a local database, then
   load any selection back onto the map to compare paths; hops shared by two or
   more traces are highlighted.
+- **Port scanning**: right-click a target or hop to scan it for open ports
+  (pure-Go TCP connect / best-effort UDP, no nmap) over common-port presets or a
+  custom range, with randomised order and jitter, optionally identifying the
+  service via banner/HTTP/TLS probing.
 - Cancel a running trace or scan.
 
 **Out of scope (v1)**
@@ -41,14 +45,15 @@ exposed to the frontend through Wails bindings and events.
 
 ```
 Wails window (React + Leaflet map UI)
-   │  Bind: Trace(req), Cancel()
-   │  Events: trace:hop, trace:geo, trace:done, trace:error
+   │  Bind: Trace(req), Scan(req), ScanPorts(req), Cancel()
+   │  Events: trace:hop, trace:geo, trace:done, trace:error, portscan:open, …
    ▼
 Go backend (in-process)
    ├── tracerouter  (spawn system traceroute/tracert, parse output)
    ├── geolocator   (IP → lat/lon, city, country, ASN; cached)
    ├── dnscheck     (A/AAAA/CNAME/MX/NS/SOA lookup → trace targets)
    ├── subdomains   (local discovery: brute force, PTR, SPF/DMARC, SRV)
+   ├── portscan     (TCP connect / UDP scan; banner/HTTP/TLS probing)
    └── history      (saved traces/scans; SQLite snapshot store)
 ```
 
@@ -85,7 +90,14 @@ Go backend (in-process)
   in the shared `tracemap.db`. Each entry stores the trace snapshot as JSON
   alongside denormalized trace/hop counts. The frontend supplies the snapshot
   because it owns the asynchronously resolved geo data.
-- **Cancellation**: `App.Cancel` cancels the running trace's context.
+- **Port scanning** (`internal/portscan`): pure-Go, no nmap. `ParsePorts`
+  validates single ports and ranges; the `top20`/`top100`/`top1000` presets come
+  from an embedded common-port table. `Scanner.Scan` probes with bounded
+  concurrency, randomised port order and jitter. TCP is a connect scan; UDP
+  sends a protocol-specific datagram and reports only replies (best-effort).
+  `Probe` identifies services by banner, HTTP `Server` header, or TLS handshake
+  (cert CN/SAN, issuer, ALPN). Results stream as events and are not persisted.
+- **Cancellation**: `App.Cancel` cancels the running trace, scan or port scan.
 
 ### 3.2 Frontend (React + TypeScript)
 - **Map**: Leaflet + OpenStreetMap tiles (no API key, free) via `react-leaflet`.
@@ -109,6 +121,7 @@ Go backend (in-process)
 | Shell       | Wails v2 (native WebKit/WebView2 window)           |
 | Backend     | Go (stdlib + Wails runtime)                        |
 | Traceroute  | System `traceroute`/`tracert` via `os/exec`        |
+| Port scan   | stdlib `net` TCP connect / UDP + `crypto/tls` probing |
 | DNS         | stdlib `net.Resolver` + raw SOA query         |
 | GeoIP       | Local GeoLite2 (City + ASN `.mmdb`), `ipwho.is` fallback |
 | Concurrency | goroutines for parallel hop geo lookups            |
@@ -128,6 +141,7 @@ Bound methods (JS: `wailsjs/go/main/App`):
 Trace(req: { target: string; maxHops: number }): Promise<void>
 Scan(req: { domain, maxHops, options: ScanOptions }): Promise<void>
 TraceTargets(req: { domain, maxHops, hosts: string[] }): Promise<void>
+ScanPorts(req: { host, protocol, preset, portRange, concurrency, timeoutMs, probe }): Promise<void>
 Cancel(): Promise<void>
 SaveHistory(req: { kind, label, maxHops, traces }): Promise<number>
 ListHistory(): Promise<HistorySummary[]>
@@ -155,6 +169,10 @@ single-trace view):
 'scan:progress'   → { phase, done, total, found }
 'scan:targets'    → ScanTarget[]         // addresses that will be traced
 'scan:done'       → number               // targets completed
+'portscan:open'     → PortResult         // one open port (port, protocol, service, product, …)
+'portscan:progress' → { host, done, total, open }
+'portscan:done'     → { host, scanned, open }
+'portscan:error'    → { target: 0, message }
 ```
 
 The target address is read from the traceroute header and always shown as the
@@ -175,6 +193,9 @@ final entry in the hop list and map, even when the trace never reaches it.
 9. **M8 — Subdomain discovery**: scan-options modal, embedded wordlist brute
    force with wildcard filtering, PTR/SPF/DMARC/SRV, SQLite cache, review pane
    and selective tracing. ✅
+10. **M9 — Port scanning**: right-click context menu on targets/hops/markers,
+    options → live-results modal, TCP connect + best-effort UDP scan over
+    presets/ranges, banner/HTTP/TLS service identification. ✅
 
 ## 7. Risks & Mitigations
 
@@ -185,7 +206,8 @@ final entry in the hop list and map, even when the trace never reaches it.
 | GeoIP accuracy (city-level is approximate) | Label as approximate; show ASN/country as primary info |
 | Slow geo lookups | Resolve in background goroutines; cache by IP |
 | `traceroute` not installed | Surface the exec error in the UI |
-| Raw sockets need privileges | Use the system binary; document `CAP_NET_RAW` if raw mode added |
+| Raw sockets need privileges | Use the system binary; port scan uses unprivileged connect/UDP probes |
+| Port scanning an unauthorised host | Warn in the dialog; only report open ports; no credentials sent |
 
 ## 8. Future (v2+)
 

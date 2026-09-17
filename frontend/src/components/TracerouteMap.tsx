@@ -19,6 +19,7 @@ interface TracerouteMapProps {
   selectedHop: number | null;
   onToggleTrace: (id: number) => void;
   onSelectHop: (hop: number) => void;
+  onContextMenu?: (host: string, label: string, x: number, y: number) => void;
   sharedHops?: Map<string, number>;
 }
 
@@ -117,6 +118,7 @@ const TracerouteMap = ({
   selectedHop,
   onToggleTrace,
   onSelectHop,
+  onContextMenu,
   sharedHops,
 }: TracerouteMapProps) => {
   const visible = selectedTraces.size === 0 ? traces : traces.filter((trace) => selectedTraces.has(trace.id));
@@ -197,6 +199,14 @@ const TracerouteMap = ({
                         click: () => {
                           onToggleTrace(trace.id);
                           onSelectHop(hop.hop);
+                        },
+                        contextmenu: (event) => {
+                          if (!hop.ip) {
+                            return;
+                          }
+                          event.originalEvent.preventDefault();
+                          event.originalEvent.stopPropagation();
+                          onContextMenu?.(hop.ip, trace.label, event.originalEvent.clientX, event.originalEvent.clientY);
                         },
                       }}
                     >

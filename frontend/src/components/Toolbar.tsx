@@ -8,6 +8,7 @@ interface ToolbarProps {
   isLoading: boolean;
   onTrace: () => void;
   onScan: () => void;
+  onPortScan: () => void;
   onCancel: () => void;
   onHistory: () => void;
   onAddToHistory: () => void;
@@ -22,6 +23,7 @@ const Toolbar = ({
   isLoading,
   onTrace,
   onScan,
+  onPortScan,
   onCancel,
   onHistory,
   onAddToHistory,
@@ -76,6 +78,15 @@ const Toolbar = ({
 
       <button className="btn btn--scan" onClick={onScan} disabled={isLoading} title="Resolve all DNS records and trace each address">
         Scan
+      </button>
+
+      <button
+        className="btn"
+        onClick={onPortScan}
+        disabled={isLoading}
+        title="Scan the target for open ports (TCP/UDP). You can also right-click a hop or marker."
+      >
+        Ports
       </button>
 
       <button className="btn" onClick={onCancel} disabled={!isLoading}>

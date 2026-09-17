@@ -14,8 +14,10 @@ import {
 import { EventsOff, EventsOn } from '../wailsjs/runtime/runtime';
 import { main } from '../wailsjs/go/models';
 import Console from './components/Console';
+import ContextMenu from './components/ContextMenu';
 import HistoryModal from './components/HistoryModal';
 import HopList from './components/HopList';
+import PortScanModal from './components/PortScanModal';
 import ScanModal from './components/ScanModal';
 import StatusBar from './components/StatusBar';
 import SubdomainList from './components/SubdomainList';
@@ -58,6 +60,9 @@ const EVENT_SCAN_PROGRESS = 'scan:progress';
 const MIN_SIDEBAR = 240;
 const MAX_SIDEBAR = 560;
 
+const MIN_RIGHT = 240;
+const MAX_RIGHT = 560;
+
 const MIN_CONSOLE = 96;
 const MAX_CONSOLE = 560;
 const MAX_LOG_LINES = 500;
@@ -74,6 +79,7 @@ const App = () => {
   const [selectedHop, setSelectedHop] = useState<number | null>(null);
   const [mode, setMode] = useState<'trace' | 'scan'>('trace');
   const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [rightWidth, setRightWidth] = useState(340);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [lastTarget, setLastTarget] = useState('');
@@ -88,6 +94,8 @@ const App = () => {
   const [selectedSubs, setSelectedSubs] = useState<Set<string>>(new Set());
   const [scanProgress, setScanProgress] = useState<ScanProgressEvent | null>(null);
   const [tracingSubs, setTracingSubs] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; host: string; label: string } | null>(null);
+  const [portScan, setPortScan] = useState<{ host: string; label: string } | null>(null);
   const [logLines, setLogLines] = useState<LogLine[]>([]);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const [consoleHeight, setConsoleHeight] = useState(200);
@@ -112,6 +120,30 @@ const App = () => {
     }
     toastTimer.current = window.setTimeout(() => setToast(null), 2600);
   }, []);
+
+  const openContextMenu = useCallback((x: number, y: number, host: string, label: string) => {
+    if (!host) {
+      return;
+    }
+    const width = 240;
+    const height = 108;
+    setContextMenu({
+      x: Math.max(8, Math.min(x, window.innerWidth - width)),
+      y: Math.max(8, Math.min(y, window.innerHeight - height)),
+      host,
+      label,
+    });
+  }, []);
+
+  const handleCopyIp = useCallback(
+    (ip: string) => {
+      navigator.clipboard?.writeText(ip).then(
+        () => showToast(`Copied ${ip}`),
+        () => showToast('Could not copy to clipboard'),
+      );
+    },
+    [showToast],
+  );
 
   useEffect(
     () => () => {
@@ -303,6 +335,16 @@ const App = () => {
     }
     setError(null);
     setScanOpen(true);
+  }, [target]);
+
+  const handlePortScan = useCallback(() => {
+    const trimmed = target.trim();
+    if (!trimmed) {
+      setError('Enter a host to scan for ports.');
+      return;
+    }
+    setError(null);
+    setPortScan({ host: trimmed, label: trimmed });
   }, [target]);
 
   const handleScanConfirm = useCallback(
@@ -584,6 +626,25 @@ const App = () => {
     [sidebarWidth],
   );
 
+  const onRightSplitterDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = rightWidth;
+      const onMove = (moveEvent: PointerEvent) => {
+        const next = Math.min(MAX_RIGHT, Math.max(MIN_RIGHT, startWidth - (moveEvent.clientX - startX)));
+        setRightWidth(next);
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    },
+    [rightWidth],
+  );
+
   const onConsoleResizeDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault();
@@ -609,6 +670,7 @@ const App = () => {
 
   const activeTrace = traces.find((trace) => trace.id === focusedTrace) ?? traces[0];
   const displayHops = useMemo(() => (activeTrace ? buildDisplayHops(activeTrace) : []), [activeTrace]);
+  const hasDiscovery = records.length > 0 || subdomains.length > 0;
 
   const totals = useMemo(() => {
     let hops = 0;
@@ -642,7 +704,10 @@ const App = () => {
           : '';
 
   return (
-    <div className="app" style={{ '--side': `${sidebarWidth}px` } as CSSProperties}>
+    <div
+      className="app"
+      style={{ '--side': `${sidebarWidth}px`, '--right': `${rightWidth}px` } as CSSProperties}
+    >
       <header className="appbar">
         <div className="brand">
           <span className="brand-dot" data-state={state} />
@@ -676,53 +741,15 @@ const App = () => {
         isLoading={isLoading}
         onTrace={handleTrace}
         onScan={handleScan}
+        onPortScan={handlePortScan}
         onCancel={handleCancel}
         onHistory={handleOpenHistory}
         onAddToHistory={handleAddToHistory}
         canAddToHistory={!isLoading && traces.length > 0}
       />
 
-      <div className="main">
+      <div className={`main${hasDiscovery ? ' main--right' : ''}`}>
         <aside className="sidebar">
-          {records.length > 0 && (
-            <details className="dns-panel" open>
-              <summary>
-                DNS RECORDS <span className="pane-count">{records.length}</span>
-              </summary>
-              <div className="dns-list">
-                {records.map((record, index) => (
-                  <div className="dns-row" key={`${record.type}-${record.value}-${index}`}>
-                    <span className="dns-type">{record.type}</span>
-                    <span className="dns-value selectable">
-                      {record.value}
-                      {record.priority ? ` · ${record.priority}` : ''}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
-
-          {subdomains.length > 0 && (
-            <>
-              <div className="pane-head">
-                <span>SUBDOMAINS</span>
-                <span className="pane-count">{subdomains.length}</span>
-              </div>
-              <div className="sub-scroll">
-                <SubdomainList
-                  subdomains={subdomains}
-                  selected={selectedSubs}
-                  tracing={tracingSubs}
-                  onToggle={handleToggleSub}
-                  onSelectAll={handleSelectAllSubs}
-                  onClear={handleClearSubs}
-                  onTrace={handleTraceSubs}
-                />
-              </div>
-            </>
-          )}
-
           {traces.length > 1 && (
             <>
               <div className="pane-head">
@@ -730,7 +757,20 @@ const App = () => {
                 <span className="pane-count">{traces.length}</span>
               </div>
               <div className="trace-list">
-                <TraceList traces={traces} selected={selectedTraces} onToggle={handleToggleTrace} />
+                <TraceList
+                  traces={traces}
+                  selected={selectedTraces}
+                  onToggle={handleToggleTrace}
+                  onContextMenu={(event, trace) => {
+                    const host = trace.targetIp || trace.ip;
+                    if (!host) {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openContextMenu(event.clientX, event.clientY, host, trace.label);
+                  }}
+                />
               </div>
             </>
           )}
@@ -744,6 +784,14 @@ const App = () => {
               hops={displayHops}
               selectedHop={selectedHop}
               onSelectHop={setSelectedHop}
+              onContextMenu={(event, hop) => {
+                if (!hop.ip) {
+                  return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                openContextMenu(event.clientX, event.clientY, hop.ip, hop.isTarget ? 'target' : `hop ${hop.hop}`);
+              }}
               sharedHops={sharedHops}
             />
           </div>
@@ -758,8 +806,61 @@ const App = () => {
           selectedHop={selectedHop}
           onToggleTrace={handleToggleTrace}
           onSelectHop={setSelectedHop}
+          onContextMenu={(host, label, x, y) => openContextMenu(x, y, host, label)}
           sharedHops={sharedHops}
         />
+
+        {hasDiscovery && (
+          <div
+            className="splitter"
+            onPointerDown={onRightSplitterDown}
+            role="separator"
+            aria-orientation="vertical"
+          />
+        )}
+
+        {hasDiscovery && (
+          <aside className="rightbar">
+            {records.length > 0 && (
+              <details className="dns-panel" open>
+                <summary>
+                  DNS RECORDS <span className="pane-count">{records.length}</span>
+                </summary>
+                <div className="dns-list">
+                  {records.map((record, index) => (
+                    <div className="dns-row" key={`${record.type}-${record.value}-${index}`}>
+                      <span className="dns-type">{record.type}</span>
+                      <span className="dns-value selectable">
+                        {record.value}
+                        {record.priority ? ` · ${record.priority}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            {subdomains.length > 0 && (
+              <div className="rightbar-section">
+                <div className="pane-head">
+                  <span>SUBDOMAINS</span>
+                  <span className="pane-count">{subdomains.length}</span>
+                </div>
+                <div className="sub-scroll">
+                  <SubdomainList
+                    subdomains={subdomains}
+                    selected={selectedSubs}
+                    tracing={tracingSubs}
+                    onToggle={handleToggleSub}
+                    onSelectAll={handleSelectAllSubs}
+                    onClear={handleClearSubs}
+                    onTrace={handleTraceSubs}
+                  />
+                </div>
+              </div>
+            )}
+          </aside>
+        )}
       </div>
 
       <Console
@@ -775,6 +876,7 @@ const App = () => {
       <StatusBar
         state={state}
         message={message}
+        progress={scanProgress}
         targets={traces.length}
         hops={totals.hops}
         located={totals.located}
@@ -801,6 +903,31 @@ const App = () => {
         onCancel={() => setScanOpen(false)}
         onConfirm={handleScanConfirm}
       />
+
+      <PortScanModal
+        open={portScan != null}
+        host={portScan?.host ?? ''}
+        label={portScan?.label}
+        onClose={() => setPortScan(null)}
+        onLog={appendLog}
+      />
+
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          title={contextMenu.label}
+          items={[
+            {
+              label: 'Find open ports',
+              hint: contextMenu.host,
+              onSelect: () => setPortScan({ host: contextMenu.host, label: contextMenu.label }),
+            },
+            { label: 'Copy IP', onSelect: () => handleCopyIp(contextMenu.host) },
+          ]}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

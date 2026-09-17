@@ -25,20 +25,14 @@ func TestDefaultPathName(t *testing.T) {
 	}
 }
 
-func TestIsWritable(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root bypasses permission checks")
+func TestDefaultPathIsUnderHomeConfig(t *testing.T) {
+	t.Setenv("TRACEROUTE_DB", "")
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Skipf("no user config dir: %v", err)
 	}
-	if !IsWritable(t.TempDir()) {
-		t.Error("expected a temp dir to be writable")
-	}
-
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	if IsWritable(dir) {
-		t.Error("expected a read-only dir to be unwritable")
+	want := filepath.Join(dir, "traceroute", "tracemap.db")
+	if got := DefaultPath(); got != want {
+		t.Errorf("DefaultPath = %q, want %q", got, want)
 	}
 }

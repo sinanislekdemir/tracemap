@@ -33,6 +33,7 @@ app.go                      App struct, bound methods (Trace/Scan/Cancel/History
 internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP -> geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS lookup -> trace targets
+internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/history/           saved traces/scans (SQLite snapshot store)
 internal/appdata/           shared SQLite database path (tracemap.db)
 frontend/src/               React app
@@ -49,10 +50,13 @@ PLAN.md                     design/architecture document
 - **Every trace event carries a `target` id.** `0` is the single-trace view;
   `Scan` assigns `1..N` to the addresses it traces, so the UI can group and
   colour concurrent traces.
-- **Advanced scan** (`App.Scan`): resolve the domain's records, emit
-  `scan:records` then `scan:targets`, trace each address with bounded
-  concurrency (`scanConcurrency`), then `scan:done`. IPv6 targets are dropped
-  when the host has no global IPv6 address (`filterUnroutable`).
+- **Advanced scan** (`App.Scan`): resolve the domain's records (including SOA
+  via a raw query — `net.Resolver` has no SOA method), expand them by following
+  `NS` hostnames and the SOA primary nameserver recursively (`dnscheck.Expand`,
+  bounded by `MaxNSDepth`/`maxNSHosts`), emit `scan:records` then `scan:targets`,
+  trace each address with bounded concurrency (`scanConcurrency`), then
+  `scan:done`. IPv6 targets are dropped when the host has no global IPv6 address
+  (`filterUnroutable`).
 - **Traceroute tool discovery** (`internal/tracerouter`): picks the first of
   `traceroute`, `tracepath`, `mtr` (Unix) or `tracert` (Windows) found on `PATH`
   or at conventional absolute paths, then builds tool-specific flags. The parser
@@ -62,12 +66,22 @@ PLAN.md                     design/architecture document
   cache → `ipwho.is` (source of truth, throttled to 2 req/s) → local GeoLite2
   `.mmdb` fallback. Only remote replies are cached. Local hits without
   coordinates are treated as misses.
-- **Database location** (`internal/appdata`): a single `tracemap.db` holds both
-  the `geo_cache` and `history_entry` tables. Written next to the binary,
-  falling back to `~/.cache/traceroute/` when that directory is not writable.
-  Env override `TRACEROUTE_DB` (`off` disables all persistence). GeoLite2
-  paths: `TRACEROUTE_GEOIP_CITY_DB`, `TRACEROUTE_GEOIP_ASN_DB`,
+- **Database location** (`internal/appdata`): a single `tracemap.db` holds the
+  `geo_cache`, `history_entry` and `subdomain` tables. It lives in the per-user
+  config directory (`~/.config/traceroute/` on Linux,
+  `~/Library/Application Support/traceroute/` on macOS, `%AppData%\traceroute\`
+  on Windows), so it is independent of where the binary runs. Env override
+  `TRACEROUTE_DB` (`off` disables all persistence). GeoLite2 paths:
+  `TRACEROUTE_GEOIP_CITY_DB`, `TRACEROUTE_GEOIP_ASN_DB`,
   `TRACEROUTE_GEOIP_DIR`.
+- **Subdomain discovery** (`internal/subdomains`): local-DNS only. `Discover`
+  detects wildcards, brute-forces the embedded 1000-name `Wordlist`, reverse-
+  resolves discovered IPs (optionally sweeping `/24`s), and extracts hosts from
+  SPF/DMARC TXT and SRV records. Bounded concurrency + rate limiter; results are
+  cached in the `subdomain` table via `Store` (implements `Cache`). The Scan
+  dialog (`ScanOptions`) chooses which techniques run; `App.Scan` emits
+  `scan:subdomains`/`scan:progress`, and `App.TraceTargets` traces a reviewed
+  selection.
 - **History** (`internal/history`): explicit snapshots of completed traces/scans
   in the shared `tracemap.db` (JSON blob per entry + denormalized counts).
   Bound methods: `SaveHistory`, `ListHistory`, `LoadHistory`,
@@ -100,6 +114,7 @@ PLAN.md                     design/architecture document
 - `dnscheck` tests use a fake `Resolver` — no real network.
 - `geolocator` tests use fake lookups/stores; real-DB tests skip when absent.
 - `history` tests use a temp-file SQLite store; no network.
+- `subdomains` tests use a fake resolver and a temp SQLite cache; no network.
 - Keep tests deterministic and offline.
 
 ## Security

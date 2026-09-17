@@ -63,6 +63,29 @@ export interface ScanTarget {
   ip: string;
 }
 
+export interface ScanOptions {
+  expandNs: boolean;
+  bruteForce: boolean;
+  ptr: boolean;
+  sweep24: boolean;
+  services: boolean;
+  autoTrace: boolean;
+  maxTargets: number;
+}
+
+export interface SubdomainResult {
+  name: string;
+  source: string;
+  ips: string[];
+}
+
+export interface ScanProgressEvent {
+  phase: string;
+  done: number;
+  total: number;
+  found: number;
+}
+
 export interface TraceState {
   id: number;
   label: string;

@@ -33,3 +33,7 @@ export function Scan(arg1) {
 export function Trace(arg1) {
   return window['go']['main']['App']['Trace'](arg1);
 }
+
+export function TraceTargets(arg1) {
+  return window['go']['main']['App']['TraceTargets'](arg1);
+}

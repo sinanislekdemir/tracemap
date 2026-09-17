@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,20 +16,23 @@ import (
 	"traceroute/internal/dnscheck"
 	"traceroute/internal/geolocator"
 	"traceroute/internal/history"
+	"traceroute/internal/subdomains"
 	"traceroute/internal/tracerouter"
 )
 
 // Event names emitted to the frontend.
 const (
-	EventHop         = "trace:hop"
-	EventGeo         = "trace:geo"
-	EventTarget      = "trace:target"
-	EventTargetGeo   = "trace:targetGeo"
-	EventDone        = "trace:done"
-	EventError       = "trace:error"
-	EventScanRecords = "scan:records"
-	EventScanTargets = "scan:targets"
-	EventScanDone    = "scan:done"
+	EventHop          = "trace:hop"
+	EventGeo          = "trace:geo"
+	EventTarget       = "trace:target"
+	EventTargetGeo    = "trace:targetGeo"
+	EventDone         = "trace:done"
+	EventError        = "trace:error"
+	EventScanRecords  = "scan:records"
+	EventScanTargets  = "scan:targets"
+	EventScanDone     = "scan:done"
+	EventSubdomains   = "scan:subdomains"
+	EventScanProgress = "scan:progress"
 )
 
 // scanConcurrency limits how many traces an advanced scan runs at once.
@@ -42,8 +46,43 @@ type TraceRequest struct {
 
 // ScanRequest starts an advanced scan of a domain.
 type ScanRequest struct {
-	Domain  string `json:"domain"`
-	MaxHops int    `json:"maxHops"`
+	Domain  string      `json:"domain"`
+	MaxHops int         `json:"maxHops"`
+	Options ScanOptions `json:"options"`
+}
+
+// ScanOptions controls what an advanced scan discovers and traces.
+type ScanOptions struct {
+	// ExpandNS follows NS/SOA nameservers recursively.
+	ExpandNS bool `json:"expandNs"`
+	// BruteForce probes the embedded wordlist of common subdomain labels.
+	BruteForce bool `json:"bruteForce"`
+	// PTR reverse-resolves discovered IPs into in-domain names.
+	PTR bool `json:"ptr"`
+	// Sweep24 also reverse-resolves the /24 around each IPv4 found.
+	Sweep24 bool `json:"sweep24"`
+	// Services parses SPF/DMARC TXT records and common SRV records.
+	Services bool `json:"services"`
+	// AutoTrace adds discovered subdomains to the traced targets.
+	AutoTrace bool `json:"autoTrace"`
+	// MaxTargets caps how many addresses are traced (0 uses the default).
+	MaxTargets int `json:"maxTargets"`
+}
+
+// TraceTargetsRequest traces an explicit set of hostnames, used after the user
+// reviews discovered subdomains.
+type TraceTargetsRequest struct {
+	Domain  string   `json:"domain"`
+	MaxHops int      `json:"maxHops"`
+	Hosts   []string `json:"hosts"`
+}
+
+// ScanProgressEvent reports subdomain discovery progress.
+type ScanProgressEvent struct {
+	Phase string `json:"phase"`
+	Done  int    `json:"done"`
+	Total int    `json:"total"`
+	Found int    `json:"found"`
 }
 
 // HistorySaveRequest snapshots a completed trace or scan for later replay. The
@@ -102,6 +141,7 @@ type App struct {
 	runner *tracerouter.Runner
 	geo    *geolocator.Resolver
 	hist   *history.Store
+	subs   *subdomains.Store
 
 	mu     sync.Mutex
 	gen    uint64
@@ -124,6 +164,14 @@ func NewApp() *App {
 		log.Printf("history: %s", store.Path())
 	}
 
+	subStore, err := subdomains.Open(appdata.DefaultPath())
+	switch {
+	case err != nil:
+		log.Printf("subdomains: cache unavailable: %v", err)
+	case subStore != nil:
+		app.subs = subStore
+	}
+
 	return app
 }
 
@@ -136,6 +184,7 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(ctx context.Context) {
 	_ = a.geo.Close()
 	_ = a.hist.Close()
+	_ = a.subs.Close()
 }
 
 // begin cancels any running operation and returns a fresh context plus an end
@@ -168,22 +217,91 @@ func (a *App) Trace(req TraceRequest) error {
 	return a.runTrace(ctx, 0, req.Target, req.MaxHops)
 }
 
-// Scan resolves a domain's DNS records and traces every address found,
-// emitting results tagged with a target id so the UI can group and colour them.
+// Scan resolves a domain's DNS records, optionally discovers subdomains, and
+// traces the resulting addresses, emitting results tagged with a target id so
+// the UI can group and colour them.
 func (a *App) Scan(req ScanRequest) error {
 	ctx, end := a.begin()
 	defer end()
 
-	records := dnscheck.Lookup(ctx, net.DefaultResolver, req.Domain)
+	opts := req.Options
+	resolver := dnscheck.NewSystemResolver(net.DefaultResolver)
+	records := dnscheck.LookupAll(ctx, resolver, req.Domain)
+	if opts.ExpandNS {
+		records = dnscheck.Expand(ctx, resolver, req.Domain, records, dnscheck.MaxNSDepth)
+	}
 	runtime.EventsEmit(a.ctx, EventScanRecords, records)
 
-	targets := dnscheck.Targets(ctx, net.DefaultResolver, req.Domain, records)
+	var discovered []subdomains.Result
+	if opts.BruteForce || opts.PTR || opts.Services {
+		discovered = subdomains.Discover(ctx, net.DefaultResolver, req.Domain, subdomains.Options{
+			BruteForce: opts.BruteForce,
+			PTR:        opts.PTR,
+			Sweep24:    opts.Sweep24,
+			Services:   opts.Services,
+			OnProgress: func(done, total, found int) {
+				runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{
+					Phase: "subdomains", Done: done, Total: total, Found: found,
+				})
+			},
+		}, a.subs)
+		runtime.EventsEmit(a.ctx, EventSubdomains, discovered)
+	}
+
+	limit := opts.MaxTargets
+	if limit <= 0 {
+		limit = dnscheck.MaxTargets
+	}
+	targets := dnscheck.AllTargets(ctx, resolver, req.Domain, records)
+	if opts.AutoTrace && len(discovered) > 0 {
+		targets = appendSubdomainTargets(targets, discovered, limit)
+	}
+	targets = capTargets(targets, limit)
 	targets = filterUnroutable(targets)
 	if len(targets) == 0 {
 		message := fmt.Sprintf("no routable address records found for %s", req.Domain)
 		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
 	}
+
+	return a.traceScan(ctx, targets, req.MaxHops)
+}
+
+// TraceTargets traces an explicit set of hostnames, used after the user reviews
+// discovered subdomains and picks which to trace.
+func (a *App) TraceTargets(req TraceTargetsRequest) error {
+	ctx, end := a.begin()
+	defer end()
+
+	targets := make([]dnscheck.Target, 0, len(req.Hosts))
+	for _, host := range req.Hosts {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			continue
+		}
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		if err != nil {
+			continue
+		}
+		for _, ip := range ips {
+			targets = append(targets, dnscheck.Target{
+				ID: len(targets) + 1, Kind: "SUB", Label: host, IP: ip.String(),
+			})
+		}
+	}
+	targets = filterUnroutable(targets)
+	if len(targets) == 0 {
+		message := "no routable addresses to trace for the selected subdomains"
+		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+		return errors.New(message)
+	}
+
+	return a.traceScan(ctx, targets, req.MaxHops)
+}
+
+// traceScan announces the targets and runs their traces with bounded
+// concurrency, then reports completion.
+func (a *App) traceScan(ctx context.Context, targets []dnscheck.Target, maxHops int) error {
 	runtime.EventsEmit(a.ctx, EventScanTargets, targets)
 
 	sem := make(chan struct{}, scanConcurrency)
@@ -194,13 +312,45 @@ func (a *App) Scan(req ScanRequest) error {
 		go func(t dnscheck.Target) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			_ = a.runTrace(ctx, t.ID, t.IP, req.MaxHops)
+			_ = a.runTrace(ctx, t.ID, t.IP, maxHops)
 		}(target)
 	}
 	wg.Wait()
 
 	runtime.EventsEmit(a.ctx, EventScanDone, len(targets))
 	return nil
+}
+
+// appendSubdomainTargets adds discovered subdomain addresses to targets until
+// limit is reached, skipping duplicates.
+func appendSubdomainTargets(targets []dnscheck.Target, discovered []subdomains.Result, limit int) []dnscheck.Target {
+	seen := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		seen[target.IP] = true
+	}
+	for _, result := range discovered {
+		for _, ip := range result.IPs {
+			if len(targets) >= limit {
+				return targets
+			}
+			if seen[ip] {
+				continue
+			}
+			seen[ip] = true
+			targets = append(targets, dnscheck.Target{
+				ID: len(targets) + 1, Kind: "SUB", Label: result.Name, IP: ip,
+			})
+		}
+	}
+	return targets
+}
+
+// capTargets truncates targets to limit when limit > 0.
+func capTargets(targets []dnscheck.Target, limit int) []dnscheck.Target {
+	if limit > 0 && len(targets) > limit {
+		return targets[:limit]
+	}
+	return targets
 }
 
 // Cancel stops the running trace or scan, if any.

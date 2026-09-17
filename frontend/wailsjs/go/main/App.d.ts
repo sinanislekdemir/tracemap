@@ -18,3 +18,5 @@ export function SaveHistory(arg1:main.HistorySaveRequest):Promise<number>;
 export function Scan(arg1:main.ScanRequest):Promise<void>;
 
 export function Trace(arg1:main.TraceRequest):Promise<void>;
+
+export function TraceTargets(arg1:main.TraceTargetsRequest):Promise<void>;

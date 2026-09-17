@@ -12,8 +12,14 @@ OpenStreetMap map.
 - Geo-locate every responsive hop (IP → lat/lon, city, country, ASN/ISP).
 - Render the ordered path on an interactive map with per-hop markers and labels.
 - Stream hops into the UI as they arrive, with a per-hop RTT/detail list.
-- **Advanced scan**: resolve a domain's A/AAAA/CNAME/MX/NS records and trace
+- **Advanced scan**: resolve a domain's A/AAAA/CNAME/MX/NS/SOA records and trace
   every address found, drawing all paths on one map with a colour legend.
+  `NS` records and the SOA primary nameserver are expanded recursively (bounded)
+  so nameserver hostnames and their addresses become trace targets too.
+- **Subdomain discovery** (local DNS only): a scan-options dialog controls
+  brute force (embedded 1000-name wordlist, wildcard-filtered), reverse DNS
+  (PTR, optional `/24` sweep), and SPF/DMARC/SRV extraction. Results are cached
+  and can be reviewed and traced selectively.
 - **History**: explicitly save completed traces/scans to a local database, then
   load any selection back onto the map to compare paths; hops shared by two or
   more traces are highlighted.
@@ -41,7 +47,8 @@ Wails window (React + Leaflet map UI)
 Go backend (in-process)
    ├── tracerouter  (spawn system traceroute/tracert, parse output)
    ├── geolocator   (IP → lat/lon, city, country, ASN; cached)
-   ├── dnscheck     (A/AAAA/CNAME/MX/NS lookup → trace targets)
+   ├── dnscheck     (A/AAAA/CNAME/MX/NS/SOA lookup → trace targets)
+   ├── subdomains   (local discovery: brute force, PTR, SPF/DMARC, SRV)
    └── history      (saved traces/scans; SQLite snapshot store)
 ```
 
@@ -69,9 +76,11 @@ Go backend (in-process)
 - **Input validation**: strictly validate the target (hostname/IP regex) to
   prevent command injection — args are passed as an array via `os/exec`, never
   interpolated into a shell string.
-- **Database** (`internal/appdata`): one `tracemap.db` next to the binary (else
-  the user cache directory) holds both the `geo_cache` and `history_entry`
-  tables; `TRACEROUTE_DB` overrides the path, `off` disables persistence.
+- **Database** (`internal/appdata`): one `tracemap.db` in the per-user config
+  directory (`~/.config/traceroute/` on Linux, `~/Library/Application Support/`
+  on macOS, `%AppData%\traceroute\` on Windows) holds the `geo_cache`,
+  `history_entry` and `subdomain` tables; `TRACEROUTE_DB` overrides the path,
+  `off` disables persistence.
 - **History** (`internal/history`): explicit snapshots of completed traces/scans
   in the shared `tracemap.db`. Each entry stores the trace snapshot as JSON
   alongside denormalized trace/hop counts. The frontend supplies the snapshot
@@ -100,7 +109,7 @@ Go backend (in-process)
 | Shell       | Wails v2 (native WebKit/WebView2 window)           |
 | Backend     | Go (stdlib + Wails runtime)                        |
 | Traceroute  | System `traceroute`/`tracert` via `os/exec`        |
-| DNS         | stdlib `net.Resolver` (A/AAAA/CNAME/MX/NS)         |
+| DNS         | stdlib `net.Resolver` + raw SOA query         |
 | GeoIP       | Local GeoLite2 (City + ASN `.mmdb`), `ipwho.is` fallback |
 | Concurrency | goroutines for parallel hop geo lookups            |
 | Frontend    | Vite + React 19 + TypeScript                       |
@@ -117,7 +126,8 @@ Bound methods (JS: `wailsjs/go/main/App`):
 
 ```ts
 Trace(req: { target: string; maxHops: number }): Promise<void>
-Scan(req: { domain: string; maxHops: number }): Promise<void>
+Scan(req: { domain, maxHops, options: ScanOptions }): Promise<void>
+TraceTargets(req: { domain, maxHops, hosts: string[] }): Promise<void>
 Cancel(): Promise<void>
 SaveHistory(req: { kind, label, maxHops, traces }): Promise<number>
 ListHistory(): Promise<HistorySummary[]>
@@ -125,6 +135,9 @@ LoadHistory(ids: number[]): Promise<HistoryEntry[]>
 DeleteHistory(id: number): Promise<void>
 ClearHistory(): Promise<void>
 ```
+
+`ScanOptions` selects NS expansion, subdomain techniques (brute force, PTR,
+`/24` sweep, SPF/DMARC/SRV) and auto-trace vs. review.
 
 Events emitted to the frontend (`wailsjs/runtime`). Every trace event carries a
 `target` id so the UI can group and colour concurrent traces (id `0` is the
@@ -137,7 +150,9 @@ single-trace view):
 'trace:targetGeo' → { target, geo }      // geolocation of the target address
 'trace:done'      → { target, hops }     // one trace finished
 'trace:error'     → { target, message }  // target 0 = whole operation failed
-'scan:records'    → DNSRecord[]          // A/AAAA/CNAME/MX/NS answers
+'scan:records'    → DNSRecord[]          // A/AAAA/CNAME/MX/NS/SOA answers
+'scan:subdomains' → SubdomainResult[]    // discovered subdomains
+'scan:progress'   → { phase, done, total, found }
 'scan:targets'    → ScanTarget[]         // addresses that will be traced
 'scan:done'       → number               // targets completed
 ```
@@ -157,6 +172,9 @@ final entry in the hop list and map, even when the trace never reaches it.
    legend and per-target list. ✅
 8. **M7 — History & comparison**: explicit save to SQLite, history modal, replay
    selection on the map, shared-hop highlighting. ✅
+9. **M8 — Subdomain discovery**: scan-options modal, embedded wordlist brute
+   force with wildcard filtering, PTR/SPF/DMARC/SRV, SQLite cache, review pane
+   and selective tracing. ✅
 
 ## 7. Risks & Mitigations
 

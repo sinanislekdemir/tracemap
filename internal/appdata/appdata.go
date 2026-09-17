@@ -1,5 +1,5 @@
 // Package appdata resolves the location of the application's single SQLite
-// database, shared by the geolocation cache and the trace history.
+// database, shared by the geolocation cache, trace history and subdomain cache.
 package appdata
 
 import (
@@ -7,12 +7,19 @@ import (
 	"path/filepath"
 )
 
-// DefaultName is the application database file name. It holds both the
-// geo_cache and history_entry tables.
+// DefaultName is the application database file name. It holds the geo_cache,
+// history_entry and subdomain tables.
 const DefaultName = "tracemap.db"
 
-// DefaultPath returns the database path: next to the running binary, or the
-// user cache directory when that directory is not writable.
+// dirName is the per-user directory the database lives in.
+const dirName = "traceroute"
+
+// DefaultPath returns the database path under the user's configuration
+// directory (e.g. ~/.config/traceroute/tracemap.db on Linux,
+// ~/Library/Application Support/traceroute/tracemap.db on macOS,
+// %AppData%\traceroute\tracemap.db on Windows), so the location is stable and
+// independent of where the binary runs.
+//
 // TRACEROUTE_DB overrides it; "off" or "none" disables persistence entirely.
 func DefaultPath() string {
 	if path := os.Getenv("TRACEROUTE_DB"); path != "" {
@@ -21,28 +28,12 @@ func DefaultPath() string {
 		}
 		return path
 	}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		if IsWritable(dir) {
-			return filepath.Join(dir, DefaultName)
-		}
+	if dir, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(dir, dirName, DefaultName)
 	}
-	if dir, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(dir, "traceroute", DefaultName)
+	// Fall back to a dot-directory in the home folder.
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "."+dirName, DefaultName)
 	}
 	return ""
-}
-
-// IsWritable reports whether dir accepts new files, by creating and removing a
-// temporary file. This catches read-only mounts and permission denials that a
-// simple mode check would miss.
-func IsWritable(dir string) bool {
-	file, err := os.CreateTemp(dir, ".tracemap-probe-*")
-	if err != nil {
-		return false
-	}
-	name := file.Name()
-	_ = file.Close()
-	_ = os.Remove(name)
-	return true
 }

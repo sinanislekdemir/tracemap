@@ -9,12 +9,15 @@ import {
   SaveHistory,
   Scan,
   Trace,
+  TraceTargets,
 } from '../wailsjs/go/main/App';
 import { EventsOff, EventsOn } from '../wailsjs/runtime/runtime';
 import { main } from '../wailsjs/go/models';
 import HistoryModal from './components/HistoryModal';
 import HopList from './components/HopList';
+import ScanModal from './components/ScanModal';
 import StatusBar from './components/StatusBar';
+import SubdomainList from './components/SubdomainList';
 import Toolbar from './components/Toolbar';
 import TraceList from './components/TraceList';
 import TracerouteMap from './components/TracerouteMap';
@@ -28,7 +31,10 @@ import type {
   HistoryEntry,
   HistorySummary,
   HopEvent,
+  ScanOptions,
+  ScanProgressEvent,
   ScanTarget,
+  SubdomainResult,
   TargetEvent,
   TargetGeoEvent,
   TraceState,
@@ -43,6 +49,8 @@ const EVENT_ERROR = 'trace:error';
 const EVENT_SCAN_RECORDS = 'scan:records';
 const EVENT_SCAN_TARGETS = 'scan:targets';
 const EVENT_SCAN_DONE = 'scan:done';
+const EVENT_SUBDOMAINS = 'scan:subdomains';
+const EVENT_SCAN_PROGRESS = 'scan:progress';
 
 const MIN_SIDEBAR = 240;
 const MAX_SIDEBAR = 560;
@@ -67,6 +75,11 @@ const App = () => {
   const [historyDisabled, setHistoryDisabled] = useState(false);
   const [viewMode, setViewMode] = useState<'live' | 'history'>('live');
   const [toast, setToast] = useState<string | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [subdomains, setSubdomains] = useState<SubdomainResult[]>([]);
+  const [selectedSubs, setSelectedSubs] = useState<Set<string>>(new Set());
+  const [scanProgress, setScanProgress] = useState<ScanProgressEvent | null>(null);
+  const [tracingSubs, setTracingSubs] = useState(false);
   const busyRef = useRef(false);
   const toastTimer = useRef<number | null>(null);
 
@@ -157,6 +170,15 @@ const App = () => {
     EventsOn(EVENT_SCAN_DONE, () => {
       busyRef.current = false;
       setIsLoading(false);
+      setScanProgress(null);
+      setTracingSubs(false);
+    });
+    EventsOn(EVENT_SUBDOMAINS, (event: SubdomainResult[]) => {
+      setSubdomains(event);
+      setSelectedSubs(new Set());
+    });
+    EventsOn(EVENT_SCAN_PROGRESS, (event: ScanProgressEvent) => {
+      setScanProgress(event);
     });
 
     return () => {
@@ -169,6 +191,8 @@ const App = () => {
       EventsOff(EVENT_SCAN_RECORDS);
       EventsOff(EVENT_SCAN_TARGETS);
       EventsOff(EVENT_SCAN_DONE);
+      EventsOff(EVENT_SUBDOMAINS);
+      EventsOff(EVENT_SCAN_PROGRESS);
     };
   }, []);
 
@@ -194,6 +218,10 @@ const App = () => {
       setIsLoading(true);
       setStartedAt(Date.now());
       setElapsedMs(0);
+      setSubdomains([]);
+      setSelectedSubs(new Set());
+      setScanProgress(null);
+      setTracingSubs(false);
     },
     [],
   );
@@ -225,12 +253,60 @@ const App = () => {
       setError('Enter a domain to scan.');
       return;
     }
-    startOperation('scan');
-    setLastTarget(trimmed);
-    Scan({ domain: trimmed, maxHops }).catch(() => {
-      // Failures are surfaced through the trace:error event.
+    setError(null);
+    setScanOpen(true);
+  }, [target]);
+
+  const handleScanConfirm = useCallback(
+    (options: ScanOptions) => {
+      const trimmed = target.trim();
+      if (!trimmed) {
+        return;
+      }
+      setScanOpen(false);
+      startOperation('scan');
+      setLastTarget(trimmed);
+      Scan(main.ScanRequest.createFrom({ domain: trimmed, maxHops, options })).catch(() => {
+        // Failures are surfaced through the trace:error event.
+      });
+    },
+    [maxHops, startOperation, target],
+  );
+
+  const handleToggleSub = useCallback((name: string) => {
+    setSelectedSubs((previous) => {
+      const next = new Set(previous);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+      }
+      return next;
     });
-  }, [maxHops, startOperation, target]);
+  }, []);
+
+  const handleSelectAllSubs = useCallback(() => {
+    setSelectedSubs(new Set(subdomains.map((subdomain) => subdomain.name)));
+  }, [subdomains]);
+
+  const handleClearSubs = useCallback(() => {
+    setSelectedSubs(new Set());
+  }, []);
+
+  const handleTraceSubs = useCallback(() => {
+    if (busyRef.current || selectedSubs.size === 0) {
+      return;
+    }
+    const hosts = [...selectedSubs];
+    busyRef.current = true;
+    setIsLoading(true);
+    setStartedAt(Date.now());
+    setElapsedMs(0);
+    setTracingSubs(true);
+    TraceTargets(main.TraceTargetsRequest.createFrom({ domain: lastTarget, maxHops, hosts })).catch(() => {
+      setTracingSubs(false);
+    });
+  }, [lastTarget, maxHops, selectedSubs]);
 
   const handleCancel = useCallback(() => {
     Cancel();
@@ -457,7 +533,9 @@ const App = () => {
   const message = error
     ? error
     : isLoading
-      ? `${mode === 'scan' ? 'scanning' : 'probing'} ${lastTarget}…`
+      ? scanProgress
+        ? `discovering subdomains ${scanProgress.done}/${scanProgress.total} · ${scanProgress.found} found`
+        : `${mode === 'scan' ? 'scanning' : 'probing'} ${lastTarget}…`
       : viewMode === 'history'
         ? `${traces.length} saved ${traces.length === 1 ? 'path' : 'paths'}`
         : traces.length > 0
@@ -526,6 +604,26 @@ const App = () => {
             </details>
           )}
 
+          {subdomains.length > 0 && (
+            <>
+              <div className="pane-head">
+                <span>SUBDOMAINS</span>
+                <span className="pane-count">{subdomains.length}</span>
+              </div>
+              <div className="sub-scroll">
+                <SubdomainList
+                  subdomains={subdomains}
+                  selected={selectedSubs}
+                  tracing={tracingSubs}
+                  onToggle={handleToggleSub}
+                  onSelectAll={handleSelectAllSubs}
+                  onClear={handleClearSubs}
+                  onTrace={handleTraceSubs}
+                />
+              </div>
+            </>
+          )}
+
           {traces.length > 1 && (
             <>
               <div className="pane-head">
@@ -582,6 +680,16 @@ const App = () => {
         onLoad={handleLoadHistory}
         onDelete={handleDeleteHistory}
         onClear={handleClearHistory}
+      />
+
+      <ScanModal
+        open={scanOpen}
+        domain={target}
+        maxHops={maxHops}
+        onDomainChange={setTarget}
+        onMaxHopsChange={setMaxHops}
+        onCancel={() => setScanOpen(false)}
+        onConfirm={handleScanConfirm}
       />
 
       {toast && <div className="toast">{toast}</div>}

@@ -207,9 +207,34 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ScanOptions {
+	    expandNs: boolean;
+	    bruteForce: boolean;
+	    ptr: boolean;
+	    sweep24: boolean;
+	    services: boolean;
+	    autoTrace: boolean;
+	    maxTargets: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScanOptions(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.expandNs = source["expandNs"];
+	        this.bruteForce = source["bruteForce"];
+	        this.ptr = source["ptr"];
+	        this.sweep24 = source["sweep24"];
+	        this.services = source["services"];
+	        this.autoTrace = source["autoTrace"];
+	        this.maxTargets = source["maxTargets"];
+	    }
+	}
 	export class ScanRequest {
 	    domain: string;
 	    maxHops: number;
+	    options: ScanOptions;
 	
 	    static createFrom(source: any = {}) {
 	        return new ScanRequest(source);
@@ -219,7 +244,26 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.domain = source["domain"];
 	        this.maxHops = source["maxHops"];
+	        this.options = this.convertValues(source["options"], ScanOptions);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class TraceRequest {
 	    target: string;
@@ -233,6 +277,22 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.target = source["target"];
 	        this.maxHops = source["maxHops"];
+	    }
+	}
+	export class TraceTargetsRequest {
+	    domain: string;
+	    maxHops: number;
+	    hosts: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new TraceTargetsRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.domain = source["domain"];
+	        this.maxHops = source["maxHops"];
+	        this.hosts = source["hosts"];
 	    }
 	}
 

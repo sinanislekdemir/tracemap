@@ -129,3 +129,197 @@ func TestTargetsCapped(t *testing.T) {
 		t.Errorf("got %d targets, want %d", len(targets), MaxTargets)
 	}
 }
+
+func hasRecord(records []Record, typ, value string) bool {
+	for _, record := range records {
+		if record.Type == typ && record.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+func countRecords(records []Record, typ, value string) int {
+	count := 0
+	for _, record := range records {
+		if record.Type == typ && record.Value == value {
+			count++
+		}
+	}
+	return count
+}
+
+func TestExpandFollowsNameservers(t *testing.T) {
+	resolver := fakeResolver{
+		ips: map[string][]net.IP{
+			"example.com":       {net.ParseIP("1.1.1.1")},
+			"ns1.example.com":   {net.ParseIP("5.5.5.5")},
+			"ns1a.provider.net": {net.ParseIP("6.6.6.6")},
+		},
+		nss: map[string][]*net.NS{
+			"example.com":     {{Host: "ns1.example.com."}},
+			"ns1.example.com": {{Host: "ns1a.provider.net."}},
+		},
+	}
+
+	base := Lookup(context.Background(), resolver, "example.com")
+	expanded := Expand(context.Background(), resolver, "example.com", base, 3)
+
+	want := []Record{
+		{Type: "A", Value: "1.1.1.1"},
+		{Type: "NS", Value: "ns1.example.com"},
+		{Type: "A", Value: "5.5.5.5"},
+		{Type: "NS", Value: "ns1a.provider.net"},
+		{Type: "A", Value: "6.6.6.6"},
+	}
+	for _, record := range want {
+		if !hasRecord(expanded, record.Type, record.Value) {
+			t.Errorf("missing %s %q in %+v", record.Type, record.Value, expanded)
+		}
+	}
+}
+
+func TestExpandRespectsDepth(t *testing.T) {
+	resolver := fakeResolver{
+		ips: map[string][]net.IP{
+			"example.com":       {net.ParseIP("1.1.1.1")},
+			"ns1.example.com":   {net.ParseIP("5.5.5.5")},
+			"ns1a.provider.net": {net.ParseIP("6.6.6.6")},
+		},
+		nss: map[string][]*net.NS{
+			"example.com":     {{Host: "ns1.example.com."}},
+			"ns1.example.com": {{Host: "ns1a.provider.net."}},
+		},
+	}
+
+	base := Lookup(context.Background(), resolver, "example.com")
+	expanded := Expand(context.Background(), resolver, "example.com", base, 1)
+
+	if !hasRecord(expanded, "A", "5.5.5.5") {
+		t.Error("first-level nameserver address was not expanded")
+	}
+	if hasRecord(expanded, "A", "6.6.6.6") {
+		t.Error("expansion went past the depth limit")
+	}
+}
+
+func TestExpandTerminatesOnLoop(t *testing.T) {
+	resolver := fakeResolver{
+		nss: map[string][]*net.NS{
+			"example.com":     {{Host: "ns1.example.com."}},
+			"ns1.example.com": {{Host: "example.com."}},
+		},
+	}
+
+	base := Lookup(context.Background(), resolver, "example.com")
+	expanded := Expand(context.Background(), resolver, "example.com", base, 5)
+	if len(expanded) == 0 {
+		t.Fatal("expected at least the base records")
+	}
+}
+
+func TestExpandDeduplicates(t *testing.T) {
+	resolver := fakeResolver{
+		ips: map[string][]net.IP{
+			"ns1.example.com": {net.ParseIP("5.5.5.5")},
+		},
+		nss: map[string][]*net.NS{
+			"example.com": {{Host: "ns1.example.com."}},
+		},
+	}
+	records := []Record{
+		{Type: "A", Name: "example.com", Value: "5.5.5.5"},
+		{Type: "NS", Name: "example.com", Value: "ns1.example.com"},
+	}
+
+	expanded := Expand(context.Background(), resolver, "example.com", records, 3)
+	if got := countRecords(expanded, "A", "5.5.5.5"); got != 1 {
+		t.Errorf("A 5.5.5.5 appears %d times, want 1", got)
+	}
+}
+
+func TestTargetsUsesRecordName(t *testing.T) {
+	records := []Record{{Type: "A", Name: "ns1.example.com", Value: "5.5.5.5"}}
+	targets := Targets(context.Background(), fakeResolver{}, "example.com", records)
+	if len(targets) != 1 {
+		t.Fatalf("got %d targets, want 1: %+v", len(targets), targets)
+	}
+	if targets[0].Label != "ns1.example.com" {
+		t.Errorf("label = %q, want ns1.example.com", targets[0].Label)
+	}
+}
+
+const sampleSOA = "ns1.example.com hostmaster.example.com 2018033792 3600 120 1209600 86400"
+
+type fakeSOAResolver struct {
+	fakeResolver
+	soa Record
+}
+
+func (f fakeSOAResolver) LookupSOA(_ context.Context, _ string) (Record, bool) {
+	return f.soa, f.soa.Type != ""
+}
+
+func TestLookupAllIncludesSOA(t *testing.T) {
+	resolver := fakeSOAResolver{
+		fakeResolver: fakeResolver{ips: map[string][]net.IP{"example.com": {net.ParseIP("1.1.1.1")}}},
+		soa:          Record{Type: "SOA", Name: "example.com", Value: sampleSOA},
+	}
+
+	records := LookupAll(context.Background(), resolver, "example.com")
+	if !hasRecord(records, "SOA", sampleSOA) {
+		t.Errorf("SOA missing from LookupAll result: %+v", records)
+	}
+
+	plain := LookupAll(context.Background(), fakeResolver{}, "example.com")
+	if hasRecord(plain, "SOA", sampleSOA) {
+		t.Error("plain resolver should not produce an SOA record")
+	}
+}
+
+func TestExpandFollowsSOAMNAME(t *testing.T) {
+	resolver := fakeResolver{
+		ips: map[string][]net.IP{
+			"ns1.example.com": {net.ParseIP("5.5.5.5")},
+		},
+	}
+	records := []Record{{Type: "SOA", Name: "example.com", Value: sampleSOA}}
+
+	expanded := Expand(context.Background(), resolver, "example.com", records, 3)
+	if !hasRecord(expanded, "A", "5.5.5.5") {
+		t.Errorf("SOA MNAME was not expanded: %+v", expanded)
+	}
+}
+
+func TestTargetsResolvesSOAMNAME(t *testing.T) {
+	resolver := fakeResolver{
+		ips: map[string][]net.IP{"ns1.example.com": {net.ParseIP("5.5.5.5")}},
+	}
+	records := []Record{{Type: "SOA", Name: "example.com", Value: sampleSOA}}
+
+	targets := Targets(context.Background(), resolver, "example.com", records)
+	if len(targets) != 1 {
+		t.Fatalf("got %d targets, want 1: %+v", len(targets), targets)
+	}
+	if targets[0].Kind != "SOA" || targets[0].IP != "5.5.5.5" {
+		t.Errorf("unexpected SOA target: %+v", targets[0])
+	}
+}
+
+func TestTargetsResolvesSOARNAME(t *testing.T) {
+	resolver := fakeResolver{
+		ips: map[string][]net.IP{
+			"ns1.example.com":        {net.ParseIP("5.5.5.5")},
+			"hostmaster.example.com": {net.ParseIP("6.6.6.6")},
+		},
+	}
+	records := []Record{{Type: "SOA", Name: "example.com", Value: sampleSOA}}
+
+	targets := Targets(context.Background(), resolver, "example.com", records)
+	if len(targets) != 2 {
+		t.Fatalf("got %d targets, want 2: %+v", len(targets), targets)
+	}
+	if targets[1].IP != "6.6.6.6" || targets[1].Label != "hostmaster.example.com" {
+		t.Errorf("unexpected RNAME target: %+v", targets[1])
+	}
+}

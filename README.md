@@ -28,8 +28,15 @@ highlighted as correlation points.*
 
 - **Single trace** — enter a hostname or IP, stream hops into the UI as they
   arrive, and watch the path build on the map.
-- **Advanced scan** — resolve a domain's `A`/`AAAA`/`CNAME`/`MX`/`NS` records
-  and trace every address found, each in its own colour with a legend.
+- **Advanced scan** — resolve a domain's `A`/`AAAA`/`CNAME`/`MX`/`NS`/`SOA`
+  records and trace every address found, each in its own colour with a legend.
+  The scan follows `NS` records and the SOA primary nameserver one level deeper,
+  resolving each nameserver host's own addresses (recursively, bounded) so
+  nameserver infrastructure is traced too.
+- **Subdomain discovery** — the Scan dialog can brute-force 1000 common labels
+  (with wildcard filtering), reverse-resolve (PTR) discovered IPs, sweep `/24`
+  netblocks, and extract hosts from SPF/DMARC TXT and SRV records. Results are
+  cached locally and can be reviewed and traced selectively.
 - **Geolocation** — every responsive hop is resolved to coordinates, city,
   country and ASN/ISP, with a persistent cache so repeat hops are instant.
 - **History** — explicitly save completed traces and scans to a local SQLite
@@ -71,7 +78,8 @@ Wails window (React + Leaflet map UI)
 Go backend (in-process)
    ├── tracerouter  spawn system traceroute/tracert, parse output
    ├── geolocator   IP → lat/lon, city, country, ASN (remote + SQLite + mmdb)
-   ├── dnscheck     A/AAAA/CNAME/MX/NS lookup → trace targets
+   ├── dnscheck     A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
+   ├── subdomains   local subdomain discovery (brute force, PTR, SPF/SRV)
    └── history      saved traces/scans (SQLite snapshot store)
 ```
 
@@ -110,8 +118,10 @@ make clean        # remove build/bin, frontend/dist
 
 1. Type a hostname or IP into **TARGET / DOMAIN** and press **Trace**
    (or `Enter`).
-2. Press **Scan** to resolve all DNS records for the domain and trace each
-   address. Each target gets its own colour in the legend and hop list.
+2. Press **Scan** to open the scan options (DNS records, subdomain discovery,
+   and whether to auto-trace or review). Each target gets its own colour in the
+   legend and hop list. Discovered subdomains appear in the **SUBDOMAINS** pane,
+   where you can select which ones to trace.
 3. Press `Esc` or **Cancel** to stop a running operation.
 4. Press **+ History** to save the current view, and **History** to browse
    saved entries.
@@ -144,9 +154,12 @@ All configuration is via environment variables.
 | `TRACEROUTE_GEOIP_ASN_DB` | auto-detected | Path to `GeoLite2-ASN.mmdb`. |
 | `TRACEROUTE_GEOIP_DIR` | `/usr/share/GeoIP` etc. | Directory to search for GeoLite2 databases. |
 
-The database is written **next to the binary** when that directory is
-writable, otherwise under `~/.cache/traceroute/`. It contains two tables:
-`geo_cache` (geolocation replies) and `history_entry` (saved traces/scans).
+The database lives in the per-user config directory:
+`~/.config/traceroute/tracemap.db` on Linux,
+`~/Library/Application Support/traceroute/tracemap.db` on macOS, and
+`%AppData%\traceroute\tracemap.db` on Windows. It contains three tables:
+`geo_cache` (geolocation replies), `history_entry` (saved traces/scans) and
+`subdomain` (discovered subdomains).
 
 Geolocation resolution order: in-memory cache → SQLite cache → `ipwho.is`
 (source of truth, throttled to 2 req/s) → local GeoLite2 `.mmdb` fallback.
@@ -159,7 +172,8 @@ main.go                     Wails entry; embeds frontend/dist; window options
 app.go                      App struct, bound methods, events
 internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP → geo (remote-first, SQLite cache, mmdb fallback)
-internal/dnscheck/          A/AAAA/CNAME/MX/NS lookup → trace targets
+internal/dnscheck/          A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
+internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/history/           saved traces/scans (SQLite snapshot store)
 frontend/src/               React app
 frontend/wailsjs/           generated bindings — do not edit by hand
@@ -170,6 +184,7 @@ frontend/wailsjs/           generated bindings — do not edit by hand
 - Go tests live beside their packages and are table-driven.
 - `tracerouter` tests use a fake shell binary — no real traceroute.
 - `dnscheck` tests use a fake resolver — no network.
+- `subdomains` tests use a fake resolver and a temp SQLite cache — no network.
 - `geolocator` tests use fake lookups/stores; real-database tests skip when
   absent.
 - `history` tests use a temporary SQLite file — no network.

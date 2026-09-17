@@ -12,11 +12,14 @@ Built with [Wails v2](https://wails.io) — a Go backend bound directly to a
 React + TypeScript frontend, packaged as a single native binary.
 
 ## Screenshots
-<img width="1280" height="777" alt="Screenshot_2026-09-17_20-45-35" src="https://github.com/user-attachments/assets/42072f92-fe50-4048-8282-e07544bf61a1" />
-<img width="1280" height="777" alt="Screenshot_2026-09-17_20-47-13" src="https://github.com/user-attachments/assets/936e8436-c2a7-4370-8931-a57c2a5d474f" />
-<img width="1280" height="777" alt="Screenshot_2026-09-17_20-47-56" src="https://github.com/user-attachments/assets/c5575b5b-81f8-4f79-8c90-68393af7277a" />
-<img width="1280" height="777" alt="Screenshot_2026-09-17_20-53-43" src="https://github.com/user-attachments/assets/a9acbc7c-81cf-4afa-be73-7ff1530f298a" />
-<img width="1280" height="777" alt="Screenshot_2026-09-17_20-48-37" src="https://github.com/user-attachments/assets/d0ceee12-6889-4124-8ee1-68d2d3d70042" />
+<img width="2434" height="1269" alt="Screenshot_20260917_222822" src="https://github.com/user-attachments/assets/bd860648-96ce-46a3-b630-8eeda8f10db8" />
+<img width="2277" height="1202" alt="Screenshot_20260917_223358" src="https://github.com/user-attachments/assets/eab44f14-914f-45c6-9265-fb17a4226dff" />
+<img width="2277" height="1204" alt="Screenshot_20260917_223552" src="https://github.com/user-attachments/assets/84b87538-35e2-47cf-a735-7dd39345fc95" />
+<img width="2277" height="1204" alt="Screenshot_20260917_223624" src="https://github.com/user-attachments/assets/29cfa1bb-5908-4519-ae97-766943d46291" />
+<img width="2277" height="1204" alt="Screenshot_20260917_223635" src="https://github.com/user-attachments/assets/0f9a8d00-eda1-4271-8f3e-1c9f10884541" />
+<img width="1297" height="753" alt="Screenshot_20260917_223701" src="https://github.com/user-attachments/assets/c80aaae9-8da9-4edd-beb8-c5567b984133" />
+<img width="2274" height="1203" alt="Screenshot_20260917_223947" src="https://github.com/user-attachments/assets/4d83ddea-5b33-4204-8d42-e62cc86b3836" />
+
 
 
 *Loading several saved traces at once; hops shared by two or more paths are

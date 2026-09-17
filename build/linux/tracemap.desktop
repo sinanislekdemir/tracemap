@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=tracemap
+GenericName=Traceroute Visualizer
+Comment=Run traceroutes and draw the paths on a world map
+Exec=tracemap
+Icon=tracemap
+Terminal=false
+Categories=Network;Monitor;Utility;
+Keywords=network;traceroute;dns;map;
+StartupNotify=true

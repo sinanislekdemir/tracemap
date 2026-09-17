@@ -67,6 +67,18 @@ jobs:
         shell: bash
         run: ${{ matrix.package }}
 
+      - name: Build Linux packages (deb, rpm)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$GITHUB_REF" =~ ^refs/tags/ ]]; then VERSION="0.0.0"; fi
+          export VERSION
+          nfpm package --config nfpm.yaml --packager deb --target "tracemap-${GITHUB_REF_NAME}-linux-amd64.deb"
+          nfpm package --config nfpm.yaml --packager rpm --target "tracemap-${GITHUB_REF_NAME}-linux-amd64.rpm"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:

@@ -1,0 +1,38 @@
+# nfpm configuration for building the Linux .deb and .rpm packages.
+# VERSION is provided by the release workflow (the git tag without the leading v).
+name: tracemap
+arch: amd64
+platform: linux
+version: ${VERSION}
+release: "1"
+section: net
+priority: optional
+maintainer: Sinan Islekdemir <sinan@islekdemir.com>
+vendor: Sinan Islekdemir
+homepage: https://github.com/sinanislekdemir/tracemap
+license: MIT
+description: |
+  A desktop traceroute visualizer.
+
+  tracemap runs traceroute/tracert from your machine, geolocates every
+  responsive hop and draws the path on an interactive world map. It can resolve
+  a domain's DNS records, discover subdomains locally, and save traces to replay
+  and compare them.
+
+contents:
+  - src: build/bin/traceroute
+    dst: /usr/bin/tracemap
+  - src: build/linux/tracemap.desktop
+    dst: /usr/share/applications/tracemap.desktop
+  - src: build/appicon.png
+    dst: /usr/share/icons/hicolor/256x256/apps/tracemap.png
+
+overrides:
+  deb:
+    depends:
+      - libgtk-3-0 | libgtk-3-0t64
+      - libwebkit2gtk-4.1-0
+  rpm:
+    depends:
+      - gtk3
+      - webkit2gtk4.1

@@ -53,9 +53,12 @@ Prebuilt binaries are attached to each tagged release:
 
 | OS | Architecture | Artifact |
 | --- | --- | --- |
-| Linux | x86_64 | `tracemap-<version>-linux-amd64.tar.gz` |
+| Linux | x86_64 | `tracemap-<version>-linux-amd64.tar.gz`, `.deb`, `.rpm` |
 | macOS | Universal (Intel + Apple Silicon) | `tracemap-<version>-darwin-universal.zip` |
 | Windows | x86_64 | `tracemap-<version>-windows-amd64.zip` |
+
+The `.deb` and `.rpm` packages install the binary as `tracemap` (to `/usr/bin`),
+a desktop entry and an icon.
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds each
 target on its native runner and publishes a GitHub release. Wails apps cannot

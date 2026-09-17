@@ -5,3 +5,5 @@ frontend/package.json.md5
 geo-cache.db
 history.db
 tracemap.db
+*.deb
+*.rpm

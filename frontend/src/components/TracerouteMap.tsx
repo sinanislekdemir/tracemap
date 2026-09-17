@@ -14,9 +14,10 @@ import type { HopData, TraceState } from '../types';
 
 interface TracerouteMapProps {
   traces: TraceState[];
-  selectedTrace: number | null;
+  selectedTraces: Set<number>;
+  focusedTrace: number | null;
   selectedHop: number | null;
-  onSelectTrace: (id: number) => void;
+  onToggleTrace: (id: number) => void;
   onSelectHop: (hop: number) => void;
   sharedHops?: Map<string, number>;
 }
@@ -111,13 +112,16 @@ function MapEffects({ positions, focus, focusActive }: { positions: Coord[]; foc
 
 const TracerouteMap = ({
   traces,
-  selectedTrace,
+  selectedTraces,
+  focusedTrace,
   selectedHop,
-  onSelectTrace,
+  onToggleTrace,
   onSelectHop,
   sharedHops,
 }: TracerouteMapProps) => {
-  const rendered: Rendered[] = traces.map((trace) => {
+  const visible = selectedTraces.size === 0 ? traces : traces.filter((trace) => selectedTraces.has(trace.id));
+
+  const rendered: Rendered[] = visible.map((trace) => {
     const hops = buildDisplayHops(trace);
     const located = locate(hops);
     const coords = located.map((entry) => entry.position);
@@ -128,7 +132,7 @@ const TracerouteMap = ({
   const totalHops = rendered.reduce((sum, entry) => sum + entry.hops.length, 0);
   const totalLocated = rendered.reduce((sum, entry) => sum + entry.located.length, 0);
 
-  const activeRendered = rendered.find((entry) => entry.trace.id === selectedTrace);
+  const activeRendered = rendered.find((entry) => entry.trace.id === focusedTrace) ?? rendered[0];
   const focus = activeRendered?.located.find((entry) => entry.hop.hop === selectedHop)?.position ?? null;
 
   return (
@@ -139,7 +143,6 @@ const TracerouteMap = ({
           <ScaleControl position="bottomleft" imperial={false} />
 
           {rendered.map(({ trace, located, route }) => {
-            const dim = selectedTrace != null && trace.id !== selectedTrace;
             const hasTarget = located.some((entry) => entry.hop.isTarget);
             return (
               <Fragment key={trace.id}>
@@ -151,7 +154,7 @@ const TracerouteMap = ({
                       pathOptions={{
                         color: trace.color,
                         weight: 7,
-                        opacity: dim ? 0.22 : 0.45,
+                        opacity: 0.45,
                         lineCap: 'round',
                       }}
                     />
@@ -161,7 +164,7 @@ const TracerouteMap = ({
                       pathOptions={{
                         color: trace.color,
                         weight: 2,
-                        opacity: dim ? 0.65 : 0.95,
+                        opacity: 0.95,
                         lineCap: 'round',
                       }}
                     />
@@ -186,13 +189,13 @@ const TracerouteMap = ({
                       pathOptions={{
                         color: trace.color,
                         fillColor: isDest || isOrigin ? trace.color : '#0a2833',
-                        fillOpacity: dim ? 0.45 : isDest ? 0.95 : isOrigin ? 0.9 : 0.8,
-                        opacity: dim ? 0.55 : 1,
+                        fillOpacity: isDest ? 0.95 : isOrigin ? 0.9 : 0.8,
+                        opacity: 1,
                         weight: shared ? 3 : 2,
                       }}
                       eventHandlers={{
                         click: () => {
-                          onSelectTrace(trace.id);
+                          onToggleTrace(trace.id);
                           onSelectHop(hop.hop);
                         },
                       }}
@@ -232,8 +235,8 @@ const TracerouteMap = ({
               <button
                 key={trace.id}
                 type="button"
-                className={`legend-row${trace.id === selectedTrace ? ' is-selected' : ''}`}
-                onClick={() => onSelectTrace(trace.id)}
+                className={`legend-row${selectedTraces.has(trace.id) ? ' is-selected' : ''}`}
+                onClick={() => onToggleTrace(trace.id)}
               >
                 <span className="legend-line" style={{ background: trace.color }} />
                 <span className="legend-label">{trace.label}</span>

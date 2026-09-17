@@ -65,7 +65,7 @@ body {
 
 .app {
   display: grid;
-  grid-template-rows: 46px auto 1fr 30px;
+  grid-template-rows: 46px auto 1fr auto 30px;
   height: 100vh;
   overflow: hidden;
 }
@@ -304,19 +304,14 @@ body {
 
 .trace-row {
   display: grid;
-  grid-template-columns: 12px 1fr auto;
+  grid-template-columns: 16px 1fr;
   align-items: center;
-  gap: 9px;
+  gap: 6px;
   width: 100%;
-  padding: 7px 8px;
+  padding: 4px 8px 4px 6px;
   margin-bottom: 3px;
   border: 1px solid transparent;
   border-radius: 7px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
 }
 .trace-row:hover {
@@ -328,6 +323,31 @@ body {
 }
 .trace-row.is-error {
   opacity: 0.55;
+}
+.trace-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.trace-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.trace-body {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 3px 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .trace-swatch {
@@ -766,6 +786,140 @@ body {
 .map-hud b {
   color: var(--accent);
   font-weight: 600;
+}
+
+/* ---------- console ---------- */
+
+.console {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #070b10;
+  border-top: 1px solid var(--border);
+}
+
+.console-splitter {
+  position: relative;
+  flex: 0 0 auto;
+  height: 5px;
+  margin-bottom: -1px;
+  background: var(--border);
+  cursor: row-resize;
+}
+.console-splitter::after {
+  content: '';
+  position: absolute;
+  inset: 2px 0;
+  background: transparent;
+  transition: background 0.15s;
+}
+.console-splitter:hover::after {
+  background: var(--accent);
+}
+.console.is-collapsed .console-splitter {
+  display: none;
+}
+
+.console-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  background: linear-gradient(180deg, #0d141d, #0a1017);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--text-faint);
+}
+.console-toggle {
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.console-toggle:hover {
+  color: var(--accent);
+}
+.console-title {
+  color: var(--text-dim);
+  letter-spacing: 0.24em;
+}
+.console-state {
+  text-transform: uppercase;
+}
+.console-state[data-state='tracing'] {
+  color: var(--accent);
+}
+.console-state[data-state='done'] {
+  color: var(--ok);
+}
+.console-state[data-state='error'] {
+  color: var(--err);
+}
+.console-spacer {
+  flex: 1;
+}
+.console-clear {
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font: inherit;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+.console-clear:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.console-clear:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.console-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 12px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.55;
+  background:
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.012) 0 1px, transparent 1px 3px),
+    #070b10;
+}
+.console-empty {
+  color: var(--text-faint);
+}
+.console-line {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.console-time {
+  color: #3a4d61;
+}
+.console-text {
+  color: var(--text-dim);
+}
+.console-line[data-level='ok'] .console-text {
+  color: var(--ok);
+}
+.console-line[data-level='warn'] .console-text {
+  color: var(--warn);
+}
+.console-line[data-level='error'] .console-text {
+  color: var(--err);
 }
 
 /* ---------- status bar ---------- */

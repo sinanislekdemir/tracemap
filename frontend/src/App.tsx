@@ -13,6 +13,7 @@ import {
 } from '../wailsjs/go/main/App';
 import { EventsOff, EventsOn } from '../wailsjs/runtime/runtime';
 import { main } from '../wailsjs/go/models';
+import Console from './components/Console';
 import HistoryModal from './components/HistoryModal';
 import HopList from './components/HopList';
 import ScanModal from './components/ScanModal';
@@ -31,6 +32,8 @@ import type {
   HistoryEntry,
   HistorySummary,
   HopEvent,
+  LogLevel,
+  LogLine,
   ScanOptions,
   ScanProgressEvent,
   ScanTarget,
@@ -55,6 +58,10 @@ const EVENT_SCAN_PROGRESS = 'scan:progress';
 const MIN_SIDEBAR = 240;
 const MAX_SIDEBAR = 560;
 
+const MIN_CONSOLE = 96;
+const MAX_CONSOLE = 560;
+const MAX_LOG_LINES = 500;
+
 const App = () => {
   const [target, setTarget] = useState('example.com');
   const [maxHops, setMaxHops] = useState(30);
@@ -62,7 +69,8 @@ const App = () => {
   const [error, setError] = useState<string | null>(null);
   const [traces, setTraces] = useState<TraceState[]>([]);
   const [records, setRecords] = useState<DNSRecord[]>([]);
-  const [selectedTrace, setSelectedTrace] = useState<number | null>(null);
+  const [selectedTraces, setSelectedTraces] = useState<Set<number>>(new Set());
+  const [focusedTrace, setFocusedTrace] = useState<number | null>(null);
   const [selectedHop, setSelectedHop] = useState<number | null>(null);
   const [mode, setMode] = useState<'trace' | 'scan'>('trace');
   const [sidebarWidth, setSidebarWidth] = useState(320);
@@ -80,8 +88,22 @@ const App = () => {
   const [selectedSubs, setSelectedSubs] = useState<Set<string>>(new Set());
   const [scanProgress, setScanProgress] = useState<ScanProgressEvent | null>(null);
   const [tracingSubs, setTracingSubs] = useState(false);
+  const [logLines, setLogLines] = useState<LogLine[]>([]);
+  const [consoleOpen, setConsoleOpen] = useState(true);
+  const [consoleHeight, setConsoleHeight] = useState(200);
   const busyRef = useRef(false);
   const toastTimer = useRef<number | null>(null);
+  const logIdRef = useRef(0);
+  const scanPhaseRef = useRef<string | null>(null);
+
+  const appendLog = useCallback((level: LogLevel, text: string) => {
+    logIdRef.current += 1;
+    const line: LogLine = { id: logIdRef.current, time: Date.now(), level, text };
+    setLogLines((previous) => {
+      const next = [...previous, line];
+      return next.length > MAX_LOG_LINES ? next.slice(next.length - MAX_LOG_LINES) : next;
+    });
+  }, []);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -109,6 +131,12 @@ const App = () => {
             : trace,
         ),
       );
+      appendLog(
+        'info',
+        `t${event.target} · hop ${String(event.hop).padStart(2, '0')} · ${event.ip || '* * *'} · ${
+          event.rttMs != null ? `${event.rttMs.toFixed(1)} ms` : '—'
+        }`,
+      );
     });
     EventsOn(EVENT_GEO, (event: GeoEvent) => {
       setTraces((previous) =>
@@ -121,16 +149,21 @@ const App = () => {
             : trace,
         ),
       );
+      const place = [event.geo.city, event.geo.country].filter(Boolean).join(', ') || 'unknown';
+      appendLog('info', `t${event.target} · hop ${String(event.hop).padStart(2, '0')} · geo ${place}${event.geo.asn ? ` · ${event.geo.asn}` : ''}`);
     });
     EventsOn(EVENT_TARGET, (event: TargetEvent) => {
       setTraces((previous) =>
         previous.map((trace) => (trace.id === event.target ? { ...trace, targetIp: event.ip } : trace)),
       );
+      appendLog('ok', `t${event.target} · target resolved ${event.ip}`);
     });
     EventsOn(EVENT_TARGET_GEO, (event: TargetGeoEvent) => {
       setTraces((previous) =>
         previous.map((trace) => (trace.id === event.target ? { ...trace, targetGeo: event.geo } : trace)),
       );
+      const place = [event.geo.city, event.geo.country].filter(Boolean).join(', ') || 'unknown';
+      appendLog('info', `t${event.target} · target geo ${place}`);
     });
     EventsOn(EVENT_DONE, (event: DoneEvent) => {
       setTraces((previous) =>
@@ -140,6 +173,7 @@ const App = () => {
         busyRef.current = false;
         setIsLoading(false);
       }
+      appendLog('ok', `t${event.target} · done · ${event.hops} hops`);
     });
     EventsOn(EVENT_ERROR, (event: ErrorEvent) => {
       setTraces((previous) =>
@@ -150,9 +184,11 @@ const App = () => {
         setError(event.message);
         setIsLoading(false);
       }
+      appendLog('error', `t${event.target} · error: ${event.message}`);
     });
     EventsOn(EVENT_SCAN_RECORDS, (event: DNSRecord[]) => {
       setRecords(event);
+      appendLog('info', `dns · ${event.length} records resolved`);
     });
     EventsOn(EVENT_SCAN_TARGETS, (event: ScanTarget[]) => {
       setTraces(
@@ -165,20 +201,28 @@ const App = () => {
           hops: [],
         })),
       );
-      setSelectedTrace(event[0]?.id ?? null);
+      setSelectedTraces(new Set());
+      setFocusedTrace(event[0]?.id ?? null);
+      appendLog('ok', `scan · ${event.length} targets queued`);
     });
     EventsOn(EVENT_SCAN_DONE, () => {
       busyRef.current = false;
       setIsLoading(false);
       setScanProgress(null);
       setTracingSubs(false);
+      appendLog('ok', 'scan · complete');
     });
     EventsOn(EVENT_SUBDOMAINS, (event: SubdomainResult[]) => {
       setSubdomains(event);
       setSelectedSubs(new Set());
+      appendLog('ok', `subdomains · ${event.length} found`);
     });
     EventsOn(EVENT_SCAN_PROGRESS, (event: ScanProgressEvent) => {
       setScanProgress(event);
+      if (event.phase !== scanPhaseRef.current) {
+        scanPhaseRef.current = event.phase;
+        appendLog('info', `scan · ${event.phase}`);
+      }
     });
 
     return () => {
@@ -194,7 +238,7 @@ const App = () => {
       EventsOff(EVENT_SUBDOMAINS);
       EventsOff(EVENT_SCAN_PROGRESS);
     };
-  }, []);
+  }, [appendLog]);
 
   useEffect(() => {
     if (!isLoading || startedAt == null) {
@@ -212,7 +256,8 @@ const App = () => {
       setViewMode('live');
       setRecords([]);
       setTraces([]);
-      setSelectedTrace(null);
+      setSelectedTraces(new Set());
+      setFocusedTrace(null);
       setSelectedHop(null);
       setError(null);
       setIsLoading(true);
@@ -222,6 +267,7 @@ const App = () => {
       setSelectedSubs(new Set());
       setScanProgress(null);
       setTracingSubs(false);
+      scanPhaseRef.current = null;
     },
     [],
   );
@@ -237,12 +283,14 @@ const App = () => {
     }
     startOperation('trace');
     setTraces([{ id: 0, label: trimmed, color: TRACE_COLORS[0], hops: [] }]);
-    setSelectedTrace(0);
+    setSelectedTraces(new Set());
+    setFocusedTrace(0);
     setLastTarget(trimmed);
+    appendLog('info', `▶ trace ${trimmed} · max ${maxHops} hops`);
     Trace({ target: trimmed, maxHops }).catch(() => {
       // Failures are surfaced through the trace:error event.
     });
-  }, [maxHops, startOperation, target]);
+  }, [appendLog, maxHops, startOperation, target]);
 
   const handleScan = useCallback(() => {
     if (busyRef.current) {
@@ -266,11 +314,12 @@ const App = () => {
       setScanOpen(false);
       startOperation('scan');
       setLastTarget(trimmed);
+      appendLog('info', `▶ scan ${trimmed} · max ${maxHops} hops`);
       Scan(main.ScanRequest.createFrom({ domain: trimmed, maxHops, options })).catch(() => {
         // Failures are surfaced through the trace:error event.
       });
     },
-    [maxHops, startOperation, target],
+    [appendLog, maxHops, startOperation, target],
   );
 
   const handleToggleSub = useCallback((name: string) => {
@@ -303,19 +352,43 @@ const App = () => {
     setStartedAt(Date.now());
     setElapsedMs(0);
     setTracingSubs(true);
+    appendLog('info', `▶ trace ${hosts.length} selected ${hosts.length === 1 ? 'host' : 'hosts'}`);
     TraceTargets(main.TraceTargetsRequest.createFrom({ domain: lastTarget, maxHops, hosts })).catch(() => {
       setTracingSubs(false);
     });
-  }, [lastTarget, maxHops, selectedSubs]);
+  }, [appendLog, lastTarget, maxHops, selectedSubs]);
 
   const handleCancel = useCallback(() => {
+    appendLog('warn', '■ cancel requested');
     Cancel();
-  }, []);
+  }, [appendLog]);
 
-  const handleSelectTrace = useCallback((id: number) => {
-    setSelectedTrace(id);
-    setSelectedHop(null);
-  }, []);
+  const handleToggleTrace = useCallback(
+    (id: number) => {
+      const removing = selectedTraces.has(id);
+      setSelectedTraces((previous) => {
+        const next = new Set(previous);
+        if (removing) {
+          next.delete(id);
+        } else {
+          next.add(id);
+        }
+        return next;
+      });
+      setFocusedTrace((current) => {
+        if (!removing) {
+          return id;
+        }
+        if (current !== id) {
+          return current;
+        }
+        const remaining = [...selectedTraces].filter((traceId) => traceId !== id);
+        return remaining.length > 0 ? remaining[0] : null;
+      });
+      setSelectedHop(null);
+    },
+    [selectedTraces],
+  );
 
   const refreshHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -411,16 +484,18 @@ const App = () => {
           setStartedAt(null);
           setElapsedMs(0);
           setTraces(loaded);
-          setSelectedTrace(loaded[0].id);
+          setSelectedTraces(new Set());
+          setFocusedTrace(loaded[0].id);
           setSelectedHop(null);
           setViewMode('history');
           setHistoryOpen(false);
+          appendLog('info', `history · loaded ${loaded.length} ${loaded.length === 1 ? 'path' : 'paths'}`);
         })
         .catch((err: unknown) => {
           showToast(err instanceof Error ? err.message : 'Could not load history');
         });
     },
-    [showToast],
+    [appendLog, showToast],
   );
 
   const handleDeleteHistory = useCallback(
@@ -447,7 +522,8 @@ const App = () => {
   const handleExitHistoryView = useCallback(() => {
     setViewMode('live');
     setTraces([]);
-    setSelectedTrace(null);
+    setSelectedTraces(new Set());
+    setFocusedTrace(null);
     setSelectedHop(null);
     setStartedAt(null);
     setElapsedMs(0);
@@ -508,7 +584,30 @@ const App = () => {
     [sidebarWidth],
   );
 
-  const activeTrace = traces.find((trace) => trace.id === selectedTrace) ?? traces[0];
+  const onConsoleResizeDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const startY = event.clientY;
+      const startHeight = consoleHeight;
+      const maxHeight = Math.min(MAX_CONSOLE, Math.round(window.innerHeight * 0.6));
+      const onMove = (moveEvent: PointerEvent) => {
+        const next = Math.min(maxHeight, Math.max(MIN_CONSOLE, startHeight + (startY - moveEvent.clientY)));
+        setConsoleHeight(next);
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    },
+    [consoleHeight],
+  );
+
+  const handleToggleConsole = useCallback(() => setConsoleOpen((value) => !value), []);
+  const handleClearConsole = useCallback(() => setLogLines([]), []);
+
+  const activeTrace = traces.find((trace) => trace.id === focusedTrace) ?? traces[0];
   const displayHops = useMemo(() => (activeTrace ? buildDisplayHops(activeTrace) : []), [activeTrace]);
 
   const totals = useMemo(() => {
@@ -631,7 +730,7 @@ const App = () => {
                 <span className="pane-count">{traces.length}</span>
               </div>
               <div className="trace-list">
-                <TraceList traces={traces} selected={selectedTrace} onSelect={handleSelectTrace} />
+                <TraceList traces={traces} selected={selectedTraces} onToggle={handleToggleTrace} />
               </div>
             </>
           )}
@@ -654,13 +753,24 @@ const App = () => {
 
         <TracerouteMap
           traces={traces}
-          selectedTrace={selectedTrace}
+          selectedTraces={selectedTraces}
+          focusedTrace={focusedTrace}
           selectedHop={selectedHop}
-          onSelectTrace={handleSelectTrace}
+          onToggleTrace={handleToggleTrace}
           onSelectHop={setSelectedHop}
           sharedHops={sharedHops}
         />
       </div>
+
+      <Console
+        lines={logLines}
+        open={consoleOpen}
+        height={consoleHeight}
+        state={state}
+        onToggle={handleToggleConsole}
+        onClear={handleClearConsole}
+        onResizeStart={onConsoleResizeDown}
+      />
 
       <StatusBar
         state={state}

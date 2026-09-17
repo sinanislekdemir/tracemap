@@ -86,6 +86,15 @@ export interface ScanProgressEvent {
   found: number;
 }
 
+export type LogLevel = 'info' | 'ok' | 'warn' | 'error';
+
+export interface LogLine {
+  id: number;
+  time: number;
+  level: LogLevel;
+  text: string;
+}
+
 export interface TraceState {
   id: number;
   label: string;

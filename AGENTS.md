@@ -25,6 +25,21 @@ Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`.
 
 Always run `make check` after changes. Never commit unless asked.
 
+## Versioning
+
+Releases are tagged `vMAJOR.MINOR.PATCH`; pushing a tag triggers the release
+workflow that packs the `.deb`/`.rpm`/`.tar.gz`.
+
+- **Always increase the PATCH version first** (e.g. `v0.2.0` → `v0.2.1`).
+- Bump the MINOR version only when the PATCH would exceed 9: after `v0.2.9` the
+  next release is `v0.3.0`.
+- Never skip ahead to a new minor while the current minor still has patch room,
+  unless the user explicitly specifies the exact version to tag.
+
+> Note: `v0.3.0` was tagged before this rule existed and should have been
+> `v0.2.1`. It stays as-is (the release already ran); the next release is
+> `v0.3.1`.
+
 ## Layout
 
 ```

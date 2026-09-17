@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import {
   Cancel,
+  CheckTools,
   ClearHistory,
   DeleteHistory,
   ListHistory,
@@ -17,6 +18,7 @@ import Console from './components/Console';
 import ContextMenu from './components/ContextMenu';
 import HistoryModal from './components/HistoryModal';
 import HopList from './components/HopList';
+import MissingToolModal from './components/MissingToolModal';
 import PortScanModal from './components/PortScanModal';
 import ScanModal from './components/ScanModal';
 import StatusBar from './components/StatusBar';
@@ -80,6 +82,8 @@ const App = () => {
   const [mode, setMode] = useState<'trace' | 'scan'>('trace');
   const [sidebarWidth, setSidebarWidth] = useState(320);
   const [rightWidth, setRightWidth] = useState(340);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [rightbarOpen, setRightbarOpen] = useState(true);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [lastTarget, setLastTarget] = useState('');
@@ -89,6 +93,7 @@ const App = () => {
   const [historyDisabled, setHistoryDisabled] = useState(false);
   const [viewMode, setViewMode] = useState<'live' | 'history'>('live');
   const [toast, setToast] = useState<string | null>(null);
+  const [toolError, setToolError] = useState<{ message: string; hint: string } | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [subdomains, setSubdomains] = useState<SubdomainResult[]>([]);
   const [selectedSubs, setSelectedSubs] = useState<Set<string>>(new Set());
@@ -155,6 +160,21 @@ const App = () => {
   );
 
   useEffect(() => {
+    CheckTools()
+      .then((status) => {
+        if (!status.available) {
+          setToolError({
+            message: status.message || 'No traceroute tool was found on this system.',
+            hint: status.hint || '',
+          });
+        }
+      })
+      .catch(() => {
+        // Failures still surface through the trace:error path.
+      });
+  }, []);
+
+  useEffect(() => {
     EventsOn(EVENT_HOP, (event: HopEvent) => {
       setTraces((previous) =>
         previous.map((trace) =>
@@ -217,6 +237,9 @@ const App = () => {
         setIsLoading(false);
       }
       appendLog('error', `t${event.target} · error: ${event.message}`);
+      if (event.code === 'missing-tool') {
+        setToolError({ message: event.message, hint: event.hint ?? '' });
+      }
     });
     EventsOn(EVENT_SCAN_RECORDS, (event: DNSRecord[]) => {
       setRecords(event);
@@ -299,6 +322,7 @@ const App = () => {
       setSelectedSubs(new Set());
       setScanProgress(null);
       setTracingSubs(false);
+      setRightbarOpen(true);
       scanPhaseRef.current = null;
     },
     [],
@@ -612,18 +636,29 @@ const App = () => {
       event.preventDefault();
       const startX = event.clientX;
       const startWidth = sidebarWidth;
+      const wasOpen = sidebarOpen;
+      let moved = false;
       const onMove = (moveEvent: PointerEvent) => {
+        if (!wasOpen) {
+          return;
+        }
+        if (Math.abs(moveEvent.clientX - startX) > 3) {
+          moved = true;
+        }
         const next = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, startWidth + moveEvent.clientX - startX));
         setSidebarWidth(next);
       };
       const onUp = () => {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
+        if (!moved) {
+          setSidebarOpen((value) => !value);
+        }
       };
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
     },
-    [sidebarWidth],
+    [sidebarOpen, sidebarWidth],
   );
 
   const onRightSplitterDown = useCallback(
@@ -631,18 +666,29 @@ const App = () => {
       event.preventDefault();
       const startX = event.clientX;
       const startWidth = rightWidth;
+      const wasOpen = rightbarOpen;
+      let moved = false;
       const onMove = (moveEvent: PointerEvent) => {
+        if (!wasOpen) {
+          return;
+        }
+        if (Math.abs(moveEvent.clientX - startX) > 3) {
+          moved = true;
+        }
         const next = Math.min(MAX_RIGHT, Math.max(MIN_RIGHT, startWidth - (moveEvent.clientX - startX)));
         setRightWidth(next);
       };
       const onUp = () => {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
+        if (!moved) {
+          setRightbarOpen((value) => !value);
+        }
       };
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
     },
-    [rightWidth],
+    [rightbarOpen, rightWidth],
   );
 
   const onConsoleResizeDown = useCallback(
@@ -748,7 +794,18 @@ const App = () => {
         canAddToHistory={!isLoading && traces.length > 0}
       />
 
-      <div className={`main${hasDiscovery ? ' main--right' : ''}`}>
+      <div
+        className="main"
+        style={{
+          gridTemplateColumns: [
+            ...(sidebarOpen ? ['var(--side)'] : []),
+            '16px',
+            '1fr',
+            ...(hasDiscovery ? ['16px', ...(rightbarOpen ? ['var(--right)'] : [])] : []),
+          ].join(' '),
+        }}
+      >
+        {sidebarOpen && (
         <aside className="sidebar">
           {traces.length > 1 && (
             <>
@@ -796,8 +853,17 @@ const App = () => {
             />
           </div>
         </aside>
+        )}
 
-        <div className="splitter" onPointerDown={onSplitterDown} role="separator" aria-orientation="vertical" />
+        <div
+          className="splitter"
+          onPointerDown={onSplitterDown}
+          role="separator"
+          aria-orientation="vertical"
+          title={sidebarOpen ? 'Collapse hops panel' : 'Expand hops panel'}
+        >
+          <span className="splitter-arrow">{sidebarOpen ? '‹' : '›'}</span>
+        </div>
 
         <TracerouteMap
           traces={traces}
@@ -812,14 +878,17 @@ const App = () => {
 
         {hasDiscovery && (
           <div
-            className="splitter"
+            className="splitter splitter--right"
             onPointerDown={onRightSplitterDown}
             role="separator"
             aria-orientation="vertical"
-          />
+            title={rightbarOpen ? 'Collapse discovery panel' : 'Expand discovery panel'}
+          >
+            <span className="splitter-arrow">{rightbarOpen ? '›' : '‹'}</span>
+          </div>
         )}
 
-        {hasDiscovery && (
+        {hasDiscovery && rightbarOpen && (
           <aside className="rightbar">
             {records.length > 0 && (
               <details className="dns-panel" open>
@@ -892,6 +961,13 @@ const App = () => {
         onLoad={handleLoadHistory}
         onDelete={handleDeleteHistory}
         onClear={handleClearHistory}
+      />
+
+      <MissingToolModal
+        open={toolError != null}
+        message={toolError?.message ?? ''}
+        hint={toolError?.hint ?? ''}
+        onClose={() => setToolError(null)}
       />
 
       <ScanModal

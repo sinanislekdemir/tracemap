@@ -6,6 +6,10 @@ export function Cancel() {
   return window['go']['main']['App']['Cancel']();
 }
 
+export function CheckTools() {
+  return window['go']['main']['App']['CheckTools']();
+}
+
 export function ClearHistory() {
   return window['go']['main']['App']['ClearHistory']();
 }

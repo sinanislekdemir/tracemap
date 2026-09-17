@@ -47,6 +47,15 @@ export interface DoneEvent {
 export interface ErrorEvent {
   target: number;
   message: string;
+  code?: string;
+  hint?: string;
+}
+
+export interface ToolStatus {
+  available: boolean;
+  tool?: string;
+  message?: string;
+  hint?: string;
 }
 
 export interface DNSRecord {

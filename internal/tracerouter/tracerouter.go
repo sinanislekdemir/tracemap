@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -187,6 +188,42 @@ type binaryCandidate struct {
 	paths []string
 }
 
+// MissingToolError reports that none of the supported traceroute tools are
+// installed. Tools lists the executable names that were searched for.
+type MissingToolError struct {
+	Tools []string
+}
+
+func (e *MissingToolError) Error() string {
+	return "no traceroute tool found: install one of " + strings.Join(e.Tools, ", ")
+}
+
+// IsMissingTool reports whether err was caused by no traceroute tool being
+// installed on the system.
+func IsMissingTool(err error) bool {
+	var missing *MissingToolError
+	return errors.As(err, &missing)
+}
+
+// Detect locates a usable traceroute tool for the current platform. It returns
+// a *MissingToolError when none is installed.
+func Detect() (string, error) {
+	return discoverBinary(runtime.GOOS)
+}
+
+// InstallHint returns a platform-specific suggestion for installing a
+// traceroute tool, shown to the user when Detect fails.
+func InstallHint() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "tracert is included with Windows. Restore C:\\Windows\\System32\\tracert.exe, or reinstall Windows."
+	case "darwin":
+		return "Install it with Homebrew: brew install traceroute — or install mtr with brew install mtr."
+	default:
+		return "Install one with your package manager: sudo apt install traceroute (Debian/Ubuntu), sudo dnf install traceroute (Fedora), or sudo pacman -S traceroute (Arch)."
+	}
+}
+
 // discoverBinary finds a usable traceroute tool for goos, preferring the
 // canonical traceroute/tracert and falling back to tracepath or mtr.
 func discoverBinary(goos string) (string, error) {
@@ -206,7 +243,7 @@ func discoverBinary(goos string) (string, error) {
 	for _, candidate := range candidates {
 		names = append(names, candidate.name)
 	}
-	return "", fmt.Errorf("no traceroute tool found: install one of %s", strings.Join(names, ", "))
+	return "", &MissingToolError{Tools: names}
 }
 
 // candidatesFor lists the tools to try, in priority order.

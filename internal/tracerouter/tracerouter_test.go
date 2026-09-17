@@ -2,6 +2,7 @@ package tracerouter
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -172,6 +173,27 @@ func TestCandidatesFor(t *testing.T) {
 	}
 	if unix[0].name != "traceroute" || unix[1].name != "tracepath" || unix[2].name != "mtr" {
 		t.Errorf("linux candidate order = %q, %q, %q", unix[0].name, unix[1].name, unix[2].name)
+	}
+}
+
+func TestMissingToolError(t *testing.T) {
+	err := &MissingToolError{Tools: []string{"traceroute", "tracepath", "mtr"}}
+	if !IsMissingTool(err) {
+		t.Fatal("IsMissingTool(MissingToolError) = false, want true")
+	}
+	for _, name := range err.Tools {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("Error() = %q, want it to mention %q", err.Error(), name)
+		}
+	}
+	if IsMissingTool(errors.New("boom")) {
+		t.Error("IsMissingTool(plain error) = true, want false")
+	}
+	if IsMissingTool(nil) {
+		t.Error("IsMissingTool(nil) = true, want false")
+	}
+	if hint := InstallHint(); hint == "" {
+		t.Error("InstallHint() = empty, want install guidance")
 	}
 }
 

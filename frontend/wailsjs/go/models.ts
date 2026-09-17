@@ -289,6 +289,24 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ToolStatus {
+	    available: boolean;
+	    tool?: string;
+	    message?: string;
+	    hint?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.tool = source["tool"];
+	        this.message = source["message"];
+	        this.hint = source["hint"];
+	    }
+	}
 	export class TraceRequest {
 	    target: string;
 	    maxHops: number;

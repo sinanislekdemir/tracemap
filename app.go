@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -166,6 +167,19 @@ type DoneEvent struct {
 type ErrorEvent struct {
 	Target  int    `json:"target"`
 	Message string `json:"message"`
+	// Code classifies an actionable failure (currently "missing-tool").
+	Code string `json:"code,omitempty"`
+	// Hint carries platform-specific remediation for the failure.
+	Hint string `json:"hint,omitempty"`
+}
+
+// ToolStatus reports whether the system traceroute tool required to run a
+// trace is available, along with install guidance when it is not.
+type ToolStatus struct {
+	Available bool   `json:"available"`
+	Tool      string `json:"tool,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Hint      string `json:"hint,omitempty"`
 }
 
 // App is the Wails application backend.
@@ -220,6 +234,20 @@ func (a *App) shutdown(ctx context.Context) {
 	_ = a.geo.Close()
 	_ = a.hist.Close()
 	_ = a.subs.Close()
+}
+
+// CheckTools reports whether a supported traceroute tool is installed, so the
+// UI can warn the user before they attempt a trace.
+func (a *App) CheckTools() ToolStatus {
+	path, err := tracerouter.Detect()
+	if err != nil {
+		return ToolStatus{
+			Available: false,
+			Message:   err.Error(),
+			Hint:      tracerouter.InstallHint(),
+		}
+	}
+	return ToolStatus{Available: true, Tool: filepath.Base(path)}
 }
 
 // begin cancels any running operation and returns a fresh context plus an end
@@ -570,7 +598,12 @@ func (a *App) runTrace(ctx context.Context, target int, host string, maxHops int
 		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: target, Message: "trace timed out"})
 		return err
 	default:
-		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: target, Message: err.Error()})
+		event := ErrorEvent{Target: target, Message: err.Error()}
+		if tracerouter.IsMissingTool(err) {
+			event.Code = "missing-tool"
+			event.Hint = tracerouter.InstallHint()
+		}
+		runtime.EventsEmit(a.ctx, EventError, event)
 		return err
 	}
 }

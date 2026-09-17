@@ -30,8 +30,8 @@ highlighted as correlation points.*
   arrive, and watch the path build on the map.
 - **Advanced scan** — resolve a domain's `A`/`AAAA`/`CNAME`/`MX`/`NS`/`SOA`
   records and trace every address found, each in its own colour with a legend.
-  The scan follows `NS` records and the SOA primary nameserver one level deeper,
-  resolving each nameserver host's own addresses (recursively, bounded) so
+  The scan follows `NS` records and the SOA primary nameserver, resolving each
+  nameserver host's own addresses recursively up to a bounded depth, so
   nameserver infrastructure is traced too.
 - **Subdomain discovery** — the Scan dialog can brute-force 1000+ common labels
   (with wildcard filtering), reverse-resolve (PTR) discovered IPs, sweep `/24`
@@ -48,6 +48,14 @@ highlighted as correlation points.*
   database, then browse, replay, delete or clear them.
 - **Comparison & correlation** — load a selection of saved traces onto one map;
   hops that appear in two or more traces are marked as shared.
+- **Collapsible panels** — click a splitter to fold the hop list or the DNS /
+  subdomain panel away and give the space to the map; the collapsed panel leaves
+  a slim rail with a chevron to bring it back. Drag a splitter to resize it.
+- **Live console** — a collapsible, resizable bottom console logs every hop,
+  geolocation and scan event with a timestamp and severity, and can be cleared.
+- **Missing-dependency guidance** — if no `traceroute`/`tracepath`/`mtr` (Unix)
+  or `tracert` (Windows) is installed, the app shows a modal with the install
+  command for your platform instead of a bare error.
 - **Cancel** — abort a running trace or scan at any time.
 - **Offline-friendly** — an optional local GeoLite2 database is used as a
   fallback when the remote geolocation service is unavailable.
@@ -80,7 +88,7 @@ through Wails bindings and runtime events.
 
 ```
 Wails window (React + Leaflet map UI)
-   │  Bind: Trace, Scan, ScanPorts, Cancel, SaveHistory, ListHistory, …
+   │  Bind: Trace, Scan, ScanPorts, CheckTools, Cancel, SaveHistory, ListHistory, …
    │  Events: trace:hop, trace:geo, trace:done, scan:targets, portscan:open, …
    ▼
 Go backend (in-process)
@@ -104,7 +112,8 @@ concurrent traces (`0` is the single-trace view; a scan assigns `1..N`).
   - Debian/Ubuntu: `gcc g++ libgtk-3-dev libwebkit2gtk-4.1-dev`
 - A system traceroute tool: `traceroute` (Linux/macOS), or a fallback of
   `tracepath`/`mtr`; Windows ships `tracert`. tracemap discovers the first one
-  available on `PATH` or at conventional install locations.
+  available on `PATH` or at conventional install locations. If none is found,
+  the app opens a modal with the install command for your platform.
 
 Run `make sysdeps` to verify the Linux build/runtime dependencies.
 
@@ -136,8 +145,11 @@ make clean        # remove build/bin, frontend/dist
    choose **Find open ports**. Pick **Common ports** (Top 20/100/1000) or a
    **Port range**, choose TCP or UDP, and optionally identify protocols. Open
    ports stream into the dialog as they are found.
-4. Press `Esc` or **Cancel** to stop a running operation.
-5. Press **+ History** to save the current view, and **History** to browse
+4. Click a splitter between the map and a side panel to collapse or expand that
+   panel — handy when you want more room for the map. Drag the splitter to
+   resize instead.
+5. Press `Esc` or **Cancel** to stop a running operation.
+6. Press **+ History** to save the current view, and **History** to browse
    saved entries.
 
 Hops that have no coordinates (private addresses, geolocation misses) stay in
@@ -190,6 +202,7 @@ internal/dnscheck/          A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
 internal/history/           saved traces/scans (SQLite snapshot store)
+internal/appdata/           shared SQLite database path (tracemap.db)
 frontend/src/               React app
 frontend/wailsjs/           generated bindings — do not edit by hand
 ```

@@ -12,14 +12,12 @@ Built with [Wails v2](https://wails.io) — a Go backend bound directly to a
 React + TypeScript frontend, packaged as a single native binary.
 
 ## Screenshots
+<img width="1280" height="777" alt="Screenshot_2026-09-17_20-45-35" src="https://github.com/user-attachments/assets/42072f92-fe50-4048-8282-e07544bf61a1" />
+<img width="1280" height="777" alt="Screenshot_2026-09-17_20-47-13" src="https://github.com/user-attachments/assets/936e8436-c2a7-4370-8931-a57c2a5d474f" />
+<img width="1280" height="777" alt="Screenshot_2026-09-17_20-47-56" src="https://github.com/user-attachments/assets/c5575b5b-81f8-4f79-8c90-68393af7277a" />
+<img width="1280" height="777" alt="Screenshot_2026-09-17_20-53-43" src="https://github.com/user-attachments/assets/a9acbc7c-81cf-4afa-be73-7ff1530f298a" />
+<img width="1280" height="777" alt="Screenshot_2026-09-17_20-48-37" src="https://github.com/user-attachments/assets/d0ceee12-6889-4124-8ee1-68d2d3d70042" />
 
-<img width="1827" height="1047" alt="image" src="https://github.com/user-attachments/assets/7c2936ef-f6d0-4ddc-8113-8767712c2026" />
-
-*Tracing a host: live hop list, per-hop RTT/ASN, and the path drawn on the map.*
-<img width="2109" height="1160" alt="image" src="https://github.com/user-attachments/assets/40c55a08-f2dd-472d-bf61-3d126213fdcf" />
-
-
-<img width="2109" height="1160" alt="image" src="https://github.com/user-attachments/assets/89df3ba7-79c8-40ac-b2e6-5867a9a504a2" />
 
 *Loading several saved traces at once; hops shared by two or more paths are
 highlighted as correlation points.*

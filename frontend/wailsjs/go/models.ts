@@ -207,6 +207,48 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class NetConnectRequest {
+	    host: string;
+	    port: number;
+	    timeoutMs: number;
+	    tls: boolean;
+	    serverName: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NetConnectRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.host = source["host"];
+	        this.port = source["port"];
+	        this.timeoutMs = source["timeoutMs"];
+	        this.tls = source["tls"];
+	        this.serverName = source["serverName"];
+	    }
+	}
+	export class NetSession {
+	    id: string;
+	    host: string;
+	    port: number;
+	    tls: boolean;
+	    local?: string;
+	    remote?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NetSession(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.host = source["host"];
+	        this.port = source["port"];
+	        this.tls = source["tls"];
+	        this.local = source["local"];
+	        this.remote = source["remote"];
+	    }
+	}
 	export class PortScanRequest {
 	    host: string;
 	    protocol: string;

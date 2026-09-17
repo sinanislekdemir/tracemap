@@ -44,12 +44,13 @@ workflow that packs the `.deb`/`.rpm`/`.tar.gz`.
 
 ```
 main.go                     Wails entry; embeds frontend/dist; window options
-app.go                      App struct, bound methods (Trace/Scan/ScanPorts/Cancel/History), events
+app.go                      App struct, bound methods (Trace/Scan/ScanPorts/Net*/Cancel/History), events
 internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP -> geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS lookup -> trace targets
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
+internal/netcat/            interactive TCP sessions ("nc") for the bottom dock
 internal/history/           saved traces/scans (SQLite snapshot store)
 internal/appdata/           shared SQLite database path (tracemap.db)
 frontend/src/               React app
@@ -110,6 +111,14 @@ PLAN.md                     design/architecture document
   `portscan:error`; results are not persisted. `ScanPorts` uses the shared
   `App.begin()` cancel model, so it cancels (and is cancelled by) other
   operations.
+- **Interactive TCP sessions** (`internal/netcat`): line-oriented netcat in the
+  bottom dock. `App.NetConnect` opens a `netcat.Session` (optional TLS) and a
+  reader goroutine streams raw bytes as `net:data` events (Go `[]byte` →
+  base64); `NetSend`/`NetClose` drive it, and `net:closed` reports the reason.
+  Sessions live in their own `Manager` registry, independent of the
+  `App.begin()` cancel model, and are all closed on shutdown. The frontend
+  (`NetcatPanel`) decodes base64, escapes control characters and caps scrollback.
+  TCP only; no UDP, ANSI terminal emulation, listen mode or file transfer.
 - **History** (`internal/history`): explicit snapshots of completed traces/scans
   in the shared `tracemap.db` (JSON blob per entry + denormalized counts).
   Bound methods: `SaveHistory`, `ListHistory`, `LoadHistory`,

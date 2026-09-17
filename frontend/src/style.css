@@ -960,6 +960,184 @@ body {
   color: var(--err);
 }
 
+/* ---------- bottom dock tabs ---------- */
+
+.dock-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.dock-tab {
+  padding: 2px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  letter-spacing: 0.24em;
+  cursor: pointer;
+}
+.dock-tab:hover {
+  color: var(--text-dim);
+}
+.dock-tab.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---------- netcat ---------- */
+
+.netcat-mount {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.netcat-mount[data-hidden='true'] {
+  display: none;
+}
+
+.netcat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.netcat-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  background: linear-gradient(180deg, #0d141d, #0a1017);
+  border-bottom: 1px solid var(--border);
+}
+.netcat-bar .input {
+  height: 30px;
+  font-size: 12px;
+}
+.netcat-field {
+  flex: 1 1 180px;
+  min-width: 120px;
+}
+.netcat-port {
+  width: 88px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+}
+.netcat-sni {
+  width: 180px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+}
+.netcat-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.netcat-spacer {
+  flex: 1;
+}
+.netcat-status {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.netcat-status[data-state='connected'] {
+  color: var(--ok);
+}
+.netcat-status[data-state='connecting'] {
+  color: var(--accent);
+}
+.netcat-status[data-state='error'] {
+  color: var(--err);
+}
+.netcat-status[data-state='closed'] {
+  color: var(--warn);
+}
+
+.netcat-term {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 12px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.55;
+  background:
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.012) 0 1px, transparent 1px 3px),
+    #070b10;
+}
+.netcat-empty {
+  color: var(--text-faint);
+}
+.netcat-line {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.netcat-prefix {
+  color: #3a4d61;
+}
+.netcat-text {
+  color: var(--text-dim);
+}
+.netcat-line[data-kind='in'] .netcat-text {
+  color: var(--accent);
+}
+.netcat-line[data-kind='info'] .netcat-text {
+  color: var(--text-faint);
+  font-style: italic;
+}
+.netcat-line[data-kind='error'] .netcat-text {
+  color: var(--err);
+}
+
+.netcat-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+.netcat-input .input {
+  flex: 1;
+  height: 30px;
+  font-size: 12px;
+}
+.netcat-ending {
+  height: 30px;
+  padding: 0 6px;
+  background: #070c12;
+  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+  outline: none;
+}
+.netcat-input .btn {
+  height: 30px;
+  padding: 0 14px;
+}
+
 /* ---------- status bar ---------- */
 
 .statusbar {

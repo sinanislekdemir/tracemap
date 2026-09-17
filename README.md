@@ -43,6 +43,11 @@ highlighted as correlation points.*
   probe over common-port presets or a custom range, with randomised port order
   and jitter to reduce the scan signature. Open ports are optionally identified
   by banner grab, HTTP request and TLS handshake (server, certificate and ALPN).
+- **Interactive TCP sessions** — open a netcat-style session to a host and port
+  from the **Net** toolbar button or the right-click **Connect (nc)** action. A
+  line-oriented terminal in the bottom dock sends what you type (LF/CRLF/none)
+  and streams the peer's raw output back; optional TLS for encrypted services.
+  TCP only.
 - **Geolocation** — every responsive hop is resolved to coordinates, city,
   country and ASN/ISP, with a persistent cache so repeat hops are instant.
 - **History** — explicitly save completed traces and scans to a local SQLite
@@ -52,8 +57,10 @@ highlighted as correlation points.*
 - **Collapsible panels** — click a splitter to fold the hop list or the DNS /
   subdomain panel away and give the space to the map; the collapsed panel leaves
   a slim rail with a chevron to bring it back. Drag a splitter to resize it.
-- **Live console** — a collapsible, resizable bottom console logs every hop,
-  geolocation and scan event with a timestamp and severity, and can be cleared.
+- **Live console & netcat dock** — a collapsible, resizable bottom dock with
+  tabs. The console logs every hop, geolocation and scan event with a timestamp
+  and severity; the netcat tab hosts interactive TCP sessions. Both can be
+  cleared independently.
 - **Missing-dependency guidance** — if no `traceroute`/`tracepath`/`mtr` (Unix)
   or `tracert` (Windows) is installed, the app shows a modal with the install
   command for your platform instead of a bare error.
@@ -89,8 +96,8 @@ through Wails bindings and runtime events.
 
 ```
 Wails window (React + Leaflet map UI)
-   │  Bind: Trace, Scan, ScanPorts, CheckTools, Cancel, SaveHistory, ListHistory, …
-   │  Events: trace:hop, trace:geo, trace:done, scan:targets, portscan:open, …
+   │  Bind: Trace, Scan, ScanPorts, NetConnect, NetSend, NetClose, CheckTools, …
+   │  Events: trace:hop, trace:geo, trace:done, scan:targets, portscan:open, net:data, …
    ▼
 Go backend (in-process)
    ├── tracerouter  spawn system traceroute/tracert, parse output
@@ -98,6 +105,7 @@ Go backend (in-process)
    ├── dnscheck     A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
    ├── subdomains   local subdomain discovery (brute force, PTR, SPF/SRV)
    ├── portscan     TCP connect / UDP port scan + banner/HTTP/TLS probing
+   ├── netcat       interactive TCP sessions (optional TLS)
    └── history      saved traces/scans (SQLite snapshot store)
 ```
 
@@ -146,11 +154,16 @@ make clean        # remove build/bin, frontend/dist
    choose **Find open ports**. Pick **Common ports** (Top 20/100/1000) or a
    **Port range**, choose TCP or UDP, and optionally identify protocols. Open
    ports stream into the dialog as they are found.
-4. Click a splitter between the map and a side panel to collapse or expand that
+4. Press **Net** in the toolbar (or right-click a target/hop and choose
+   **Connect (nc)**) to open the netcat tab in the bottom dock. Enter a port,
+   optionally enable **TLS**, connect, and type lines to send; output streams
+   into the terminal. Choose the line ending (LF/CRLF/none) and press
+   **Disconnect** when done.
+5. Click a splitter between the map and a side panel to collapse or expand that
    panel — handy when you want more room for the map. Drag the splitter to
    resize instead.
-5. Press `Esc` or **Cancel** to stop a running operation.
-6. Press **+ History** to save the current view, and **History** to browse
+6. Press `Esc` or **Cancel** to stop a running operation.
+7. Press **+ History** to save the current view, and **History** to browse
    saved entries.
 
 Hops that have no coordinates (private addresses, geolocation misses) stay in
@@ -202,6 +215,7 @@ internal/geolocator/        IP → geo (remote-first, SQLite cache, mmdb fallbac
 internal/dnscheck/          A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
+internal/netcat/            interactive TCP sessions (optional TLS)
 internal/history/           saved traces/scans (SQLite snapshot store)
 internal/appdata/           shared SQLite database path (tracemap.db)
 frontend/src/               React app
@@ -219,6 +233,8 @@ frontend/wailsjs/           generated bindings — do not edit by hand
 - `history` tests use a temporary SQLite file — no network.
 - `portscan` tests scan localhost listeners and `httptest` HTTP/TLS servers —
   no external network.
+- `netcat` tests use localhost listeners and `httptest` TLS servers — no
+  external network.
 
 Run everything with:
 
@@ -234,6 +250,10 @@ make check
 - Port scanning dials the host directly from the Go standard library; no shell
   is involved and only open ports are reported. Scan only hosts you are
   authorised to test.
+- Netcat sessions open a plain TCP (or TLS) socket from the Go standard library;
+  no shell is involved. TLS certificate verification is intentionally skipped
+  because the goal is service identification, not trust. Connect only to hosts
+  you are authorised to use.
 - No secrets or credentials are stored; all data stays in local SQLite files.
 
 ## License

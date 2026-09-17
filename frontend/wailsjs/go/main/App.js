@@ -26,6 +26,18 @@ export function LoadHistory(arg1) {
   return window['go']['main']['App']['LoadHistory'](arg1);
 }
 
+export function NetClose(arg1) {
+  return window['go']['main']['App']['NetClose'](arg1);
+}
+
+export function NetConnect(arg1) {
+  return window['go']['main']['App']['NetConnect'](arg1);
+}
+
+export function NetSend(arg1, arg2) {
+  return window['go']['main']['App']['NetSend'](arg1, arg2);
+}
+
 export function SaveHistory(arg1) {
   return window['go']['main']['App']['SaveHistory'](arg1);
 }

@@ -18,6 +18,7 @@ import (
 	"traceroute/internal/dnscheck"
 	"traceroute/internal/geolocator"
 	"traceroute/internal/history"
+	"traceroute/internal/netcat"
 	"traceroute/internal/portscan"
 	"traceroute/internal/subdomains"
 	"traceroute/internal/tracerouter"
@@ -40,6 +41,9 @@ const (
 	EventPortProgress = "portscan:progress"
 	EventPortDone     = "portscan:done"
 	EventPortError    = "portscan:error"
+	EventNetData      = "net:data"
+	EventNetClosed    = "net:closed"
+	EventNetError     = "net:error"
 )
 
 // scanConcurrency limits how many traces an advanced scan runs at once.
@@ -119,6 +123,38 @@ type PortScanDoneEvent struct {
 	Open    int    `json:"open"`
 }
 
+// NetConnectRequest opens an interactive, line-oriented TCP session (netcat).
+type NetConnectRequest struct {
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	TimeoutMs  int    `json:"timeoutMs"`
+	TLS        bool   `json:"tls"`
+	ServerName string `json:"serverName"`
+}
+
+// NetSession describes a live netcat session.
+type NetSession struct {
+	ID     string `json:"id"`
+	Host   string `json:"host"`
+	Port   int    `json:"port"`
+	TLS    bool   `json:"tls"`
+	Local  string `json:"local,omitempty"`
+	Remote string `json:"remote,omitempty"`
+}
+
+// NetDataEvent carries a chunk of data received from a session's peer. Data is
+// raw bytes; JSON encodes it as base64 so binary output survives intact.
+type NetDataEvent struct {
+	Session string `json:"session"`
+	Data    []byte `json:"data"`
+}
+
+// NetClosedEvent reports that a session ended and why.
+type NetClosedEvent struct {
+	Session string `json:"session"`
+	Reason  string `json:"reason"`
+}
+
 // HistorySaveRequest snapshots a completed trace or scan for later replay. The
 // frontend builds it from the traces it currently holds, since geolocation
 // results arrive asynchronously after the backend has finished the trace.
@@ -190,6 +226,7 @@ type App struct {
 	hist   *history.Store
 	subs   *subdomains.Store
 	ports  *portscan.Scanner
+	nc     *netcat.Manager
 
 	mu     sync.Mutex
 	gen    uint64
@@ -202,6 +239,7 @@ func NewApp() *App {
 		runner: tracerouter.NewRunner(),
 		geo:    geolocator.NewResolver(),
 		ports:  portscan.NewScanner(),
+		nc:     netcat.NewManager(),
 	}
 
 	store, err := history.Open(appdata.DefaultPath())
@@ -234,6 +272,7 @@ func (a *App) shutdown(ctx context.Context) {
 	_ = a.geo.Close()
 	_ = a.hist.Close()
 	_ = a.subs.Close()
+	a.nc.CloseAll()
 }
 
 // CheckTools reports whether a supported traceroute tool is installed, so the
@@ -472,6 +511,52 @@ func resolveScanPorts(req PortScanRequest) ([]int, error) {
 		return portscan.ParsePorts(req.PortRange)
 	}
 	return portscan.PresetPorts(req.Preset)
+}
+
+// NetConnect opens an interactive TCP session and streams the peer's output
+// through net:data events until NetClose is called or the peer disconnects
+// (net:closed). Sessions are independent of the trace/scan cancel model.
+func (a *App) NetConnect(req NetConnectRequest) (NetSession, error) {
+	host := strings.TrimSpace(req.Host)
+	if host == "" {
+		message := "no host to connect to"
+		runtime.EventsEmit(a.ctx, EventNetError, ErrorEvent{Target: 0, Message: message})
+		return NetSession{}, errors.New(message)
+	}
+
+	session, err := a.nc.Connect(a.ctx, netcat.Options{
+		Host:       host,
+		Port:       req.Port,
+		Timeout:    time.Duration(req.TimeoutMs) * time.Millisecond,
+		TLS:        req.TLS,
+		ServerName: req.ServerName,
+	}, netcat.Observer{
+		OnData: func(id string, data []byte) {
+			runtime.EventsEmit(a.ctx, EventNetData, NetDataEvent{Session: id, Data: data})
+		},
+		OnClose: func(id, reason string) {
+			runtime.EventsEmit(a.ctx, EventNetClosed, NetClosedEvent{Session: id, Reason: reason})
+		},
+	})
+	if err != nil {
+		runtime.EventsEmit(a.ctx, EventNetError, ErrorEvent{Target: 0, Message: err.Error()})
+		return NetSession{}, err
+	}
+
+	return NetSession{
+		ID: session.ID, Host: session.Host, Port: session.Port,
+		TLS: session.TLS, Local: session.Local, Remote: session.Remote,
+	}, nil
+}
+
+// NetSend writes data to a live netcat session.
+func (a *App) NetSend(sessionID string, data string) error {
+	return a.nc.Send(sessionID, data)
+}
+
+// NetClose ends a netcat session.
+func (a *App) NetClose(sessionID string) error {
+	return a.nc.Close(sessionID)
 }
 
 // Cancel stops the running trace or scan, if any.

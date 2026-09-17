@@ -9,6 +9,7 @@ interface ToolbarProps {
   onTrace: () => void;
   onScan: () => void;
   onPortScan: () => void;
+  onNet: () => void;
   onCancel: () => void;
   onHistory: () => void;
   onAddToHistory: () => void;
@@ -24,6 +25,7 @@ const Toolbar = ({
   onTrace,
   onScan,
   onPortScan,
+  onNet,
   onCancel,
   onHistory,
   onAddToHistory,
@@ -87,6 +89,14 @@ const Toolbar = ({
         title="Scan the target for open ports (TCP/UDP). You can also right-click a hop or marker."
       >
         Ports
+      </button>
+
+      <button
+        className="btn"
+        onClick={onNet}
+        title="Open an interactive TCP session to the target (netcat). You can also right-click a hop or marker."
+      >
+        Net
       </button>
 
       <button className="btn" onClick={onCancel} disabled={!isLoading}>

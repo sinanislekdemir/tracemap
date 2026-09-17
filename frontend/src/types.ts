@@ -127,6 +127,19 @@ export interface PortScanOptions {
   probe: boolean;
 }
 
+export interface NetDataEvent {
+  session: string;
+  /** Raw bytes, base64-encoded by the Go JSON encoder. */
+  data: string;
+}
+
+export interface NetClosedEvent {
+  session: string;
+  reason: string;
+}
+
+export type NetStatus = 'idle' | 'connecting' | 'connected' | 'closed' | 'error';
+
 export type LogLevel = 'info' | 'ok' | 'warn' | 'error';
 
 export interface LogLine {

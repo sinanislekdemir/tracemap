@@ -14,7 +14,8 @@ import {
 } from '../wailsjs/go/main/App';
 import { EventsOff, EventsOn } from '../wailsjs/runtime/runtime';
 import { main } from '../wailsjs/go/models';
-import Console from './components/Console';
+import BottomDock from './components/BottomDock';
+import type { BottomTab } from './components/BottomDock';
 import ContextMenu from './components/ContextMenu';
 import HistoryModal from './components/HistoryModal';
 import HopList from './components/HopList';
@@ -102,8 +103,10 @@ const App = () => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; host: string; label: string } | null>(null);
   const [portScan, setPortScan] = useState<{ host: string; label: string } | null>(null);
   const [logLines, setLogLines] = useState<LogLine[]>([]);
-  const [consoleOpen, setConsoleOpen] = useState(true);
-  const [consoleHeight, setConsoleHeight] = useState(200);
+  const [bottomOpen, setBottomOpen] = useState(true);
+  const [bottomHeight, setBottomHeight] = useState(200);
+  const [bottomTab, setBottomTab] = useState<BottomTab>('console');
+  const [netRequest, setNetRequest] = useState<{ host: string; nonce: number } | null>(null);
   const busyRef = useRef(false);
   const toastTimer = useRef<number | null>(null);
   const logIdRef = useRef(0);
@@ -691,15 +694,15 @@ const App = () => {
     [rightbarOpen, rightWidth],
   );
 
-  const onConsoleResizeDown = useCallback(
+  const onBottomResizeDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault();
       const startY = event.clientY;
-      const startHeight = consoleHeight;
+      const startHeight = bottomHeight;
       const maxHeight = Math.min(MAX_CONSOLE, Math.round(window.innerHeight * 0.6));
       const onMove = (moveEvent: PointerEvent) => {
         const next = Math.min(maxHeight, Math.max(MIN_CONSOLE, startHeight + (startY - moveEvent.clientY)));
-        setConsoleHeight(next);
+        setBottomHeight(next);
       };
       const onUp = () => {
         window.removeEventListener('pointermove', onMove);
@@ -708,11 +711,17 @@ const App = () => {
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
     },
-    [consoleHeight],
+    [bottomHeight],
   );
 
-  const handleToggleConsole = useCallback(() => setConsoleOpen((value) => !value), []);
+  const handleToggleBottom = useCallback(() => setBottomOpen((value) => !value), []);
   const handleClearConsole = useCallback(() => setLogLines([]), []);
+
+  const openNetcat = useCallback((host: string) => {
+    setBottomTab('netcat');
+    setBottomOpen(true);
+    setNetRequest({ host, nonce: Date.now() });
+  }, []);
 
   const activeTrace = traces.find((trace) => trace.id === focusedTrace) ?? traces[0];
   const displayHops = useMemo(() => (activeTrace ? buildDisplayHops(activeTrace) : []), [activeTrace]);
@@ -788,6 +797,7 @@ const App = () => {
         onTrace={handleTrace}
         onScan={handleScan}
         onPortScan={handlePortScan}
+        onNet={() => openNetcat(target.trim())}
         onCancel={handleCancel}
         onHistory={handleOpenHistory}
         onAddToHistory={handleAddToHistory}
@@ -932,14 +942,18 @@ const App = () => {
         )}
       </div>
 
-      <Console
-        lines={logLines}
-        open={consoleOpen}
-        height={consoleHeight}
-        state={state}
-        onToggle={handleToggleConsole}
-        onClear={handleClearConsole}
-        onResizeStart={onConsoleResizeDown}
+      <BottomDock
+        open={bottomOpen}
+        height={bottomHeight}
+        tab={bottomTab}
+        onTabChange={setBottomTab}
+        onToggle={handleToggleBottom}
+        onResizeStart={onBottomResizeDown}
+        logLines={logLines}
+        logState={state}
+        onClearLog={handleClearConsole}
+        netRequest={netRequest}
+        onLog={appendLog}
       />
 
       <StatusBar
@@ -998,6 +1012,11 @@ const App = () => {
               label: 'Find open ports',
               hint: contextMenu.host,
               onSelect: () => setPortScan({ host: contextMenu.host, label: contextMenu.label }),
+            },
+            {
+              label: 'Connect (nc)',
+              hint: contextMenu.host,
+              onSelect: () => openNetcat(contextMenu.host),
             },
             { label: 'Copy IP', onSelect: () => handleCopyIp(contextMenu.host) },
           ]}

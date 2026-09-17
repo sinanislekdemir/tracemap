@@ -9,10 +9,15 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +96,7 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -98,8 +104,58 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
-        with:
-          files: artifacts/*
-          generate_release_notes: true
+      # Create (or reuse) the release as a draft so users never see a partial
+      # release. It is published only after every asset has been uploaded.
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; reusing it."
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag
+          fi
+
+      # Upload assets one at a time with backoff. The previous parallel uploader
+      # failed the whole job when a single asset hit a transient API error.
+      - name: Upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          failed=0
+          shopt -s nullglob
+          assets=(artifacts/*)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No assets found under artifacts/"
+            exit 1
+          fi
+          for f in "${assets[@]}"; do
+            name="$(basename "$f")"
+            echo "::group::Uploading $name"
+            ok=0
+            for attempt in 1 2 3 4 5; do
+              if gh release upload "$GITHUB_REF_NAME" "$f" --clobber; then
+                ok=1
+                break
+              fi
+              delay=$((attempt * 15))
+              echo "Attempt $attempt failed for $name; retrying in ${delay}s..."
+              sleep "$delay"
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "::error::Failed to upload $name after 5 attempts"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$failed"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

@@ -3,6 +3,7 @@ package geolocator
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -124,6 +125,183 @@ func TestResolveOneReturnsRemoteErrorWithoutLocal(t *testing.T) {
 
 	if _, err := resolver.ResolveOne(context.Background(), "8.8.8.8"); err == nil {
 		t.Fatal("expected the remote error to surface")
+	}
+}
+
+func TestResolveOneRetriesTransientError(t *testing.T) {
+	var calls int32
+	resolver := NewResolverWithLookup(func(ctx context.Context, ip string) (GeoData, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return GeoData{}, errors.New("temporary blip")
+		}
+		return GeoData{Lat: 1, Lon: 2, City: "ok", Resolved: true}, nil
+	})
+	resolver.attemptTimeout = 0
+
+	data, err := resolver.ResolveOne(context.Background(), "8.8.8.8")
+	if err != nil {
+		t.Fatalf("ResolveOne: %v", err)
+	}
+	if data.City != "ok" {
+		t.Errorf("city = %q, want ok", data.City)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("lookup called %d times, want 2", got)
+	}
+}
+
+func TestResolveOneDoesNotRetryPermanentError(t *testing.T) {
+	var calls int32
+	resolver := NewResolverWithLookup(func(ctx context.Context, ip string) (GeoData, error) {
+		atomic.AddInt32(&calls, 1)
+		return GeoData{}, &httpStatusError{ip: ip, status: "400 Bad Request", code: http.StatusBadRequest}
+	})
+	resolver.attemptTimeout = 0
+
+	if _, err := resolver.ResolveOne(context.Background(), "8.8.8.8"); err == nil {
+		t.Fatal("expected an error")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("lookup called %d times, want 1", got)
+	}
+}
+
+func TestResolveOneBreakerFallsBackToLocal(t *testing.T) {
+	var remoteCalls, localCalls int32
+	resolver := newResolver(
+		func(ctx context.Context, ip string) (GeoData, error) {
+			atomic.AddInt32(&remoteCalls, 1)
+			return GeoData{}, errors.New("remote down")
+		},
+		func(ip string) (GeoData, bool) {
+			atomic.AddInt32(&localCalls, 1)
+			return GeoData{City: "local", Lat: 1, Lon: 2, Resolved: true}, true
+		},
+	)
+	resolver.breaker = newCircuitBreaker(1, time.Minute)
+	resolver.attemptTimeout = 0
+	resolver.maxAttempts = 1
+
+	if _, err := resolver.ResolveOne(context.Background(), "8.8.8.8"); err != nil {
+		t.Fatalf("ResolveOne: %v", err)
+	}
+	before := atomic.LoadInt32(&remoteCalls)
+
+	// The breaker is now open: the next lookup must skip the remote entirely.
+	data, err := resolver.ResolveOne(context.Background(), "1.1.1.1")
+	if err != nil {
+		t.Fatalf("ResolveOne (breaker open): %v", err)
+	}
+	if data.City != "local" {
+		t.Errorf("city = %q, want local", data.City)
+	}
+	if got := atomic.LoadInt32(&remoteCalls); got != before {
+		t.Errorf("remote calls = %d, want %d (breaker should be open)", got, before)
+	}
+	if got := atomic.LoadInt32(&localCalls); got != 2 {
+		t.Errorf("local calls = %d, want 2", got)
+	}
+}
+
+func TestResolveOneFallsBackOnDeadline(t *testing.T) {
+	var localCalls int32
+	resolver := newResolver(
+		func(ctx context.Context, ip string) (GeoData, error) {
+			<-ctx.Done()
+			return GeoData{}, ctx.Err()
+		},
+		func(ip string) (GeoData, bool) {
+			atomic.AddInt32(&localCalls, 1)
+			return GeoData{City: "local", Lat: 1, Lon: 2, Resolved: true}, true
+		},
+	)
+	resolver.attemptTimeout = 0
+	resolver.maxAttempts = 1
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	data, err := resolver.ResolveOne(ctx, "8.8.8.8")
+	if err != nil {
+		t.Fatalf("ResolveOne: %v", err)
+	}
+	if data.City != "local" {
+		t.Errorf("city = %q, want local", data.City)
+	}
+	if got := atomic.LoadInt32(&localCalls); got != 1 {
+		t.Errorf("local calls = %d, want 1", got)
+	}
+}
+
+func TestResolveOneCancelledContextSkipsLocal(t *testing.T) {
+	var localCalls int32
+	resolver := newResolver(
+		func(ctx context.Context, ip string) (GeoData, error) {
+			return GeoData{}, errors.New("should not be called")
+		},
+		func(ip string) (GeoData, bool) {
+			atomic.AddInt32(&localCalls, 1)
+			return GeoData{City: "local", Resolved: true}, true
+		},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := resolver.ResolveOne(ctx, "8.8.8.8"); err == nil {
+		t.Fatal("expected an error for a cancelled context")
+	}
+	if got := atomic.LoadInt32(&localCalls); got != 0 {
+		t.Errorf("local calls = %d, want 0", got)
+	}
+}
+
+func TestCircuitBreakerHalfOpen(t *testing.T) {
+	b := newCircuitBreaker(2, 30*time.Millisecond)
+	if !b.allow() {
+		t.Fatal("fresh breaker should allow")
+	}
+	b.record(false)
+	if !b.allow() {
+		t.Fatal("breaker should stay closed below the limit")
+	}
+	b.record(false)
+	if b.allow() {
+		t.Fatal("breaker should be open after reaching the limit")
+	}
+
+	time.Sleep(40 * time.Millisecond)
+	if !b.allow() {
+		t.Fatal("half-open breaker should admit one probe")
+	}
+	if b.allow() {
+		t.Fatal("half-open breaker should admit only one probe")
+	}
+	b.record(true)
+	if !b.allow() {
+		t.Fatal("breaker should close after a successful probe")
+	}
+}
+
+func TestRetryable(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"transport", errors.New("connection refused"), true},
+		{"timeout", context.DeadlineExceeded, true},
+		{"cancelled", context.Canceled, false},
+		{"429", &httpStatusError{code: http.StatusTooManyRequests}, true},
+		{"500", &httpStatusError{code: http.StatusInternalServerError}, true},
+		{"400", &httpStatusError{code: http.StatusBadRequest}, false},
+		{"api rejection", &apiError{message: "invalid IP"}, false},
+	}
+	for _, tc := range cases {
+		if got := retryable(tc.err); got != tc.want {
+			t.Errorf("%s: retryable = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

@@ -4,11 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"traceroute/internal/netutil"
+	"traceroute/internal/sqliteutil"
 )
 
 // Store is the SQLite-backed subdomain cache, sharing the application database
@@ -21,36 +20,23 @@ type Store struct {
 // Open opens (creating if needed) the subdomain cache. An empty path disables
 // caching and returns (nil, nil).
 func Open(path string) (*Store, error) {
-	if path == "" {
-		return nil, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-
-	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sqliteutil.Open(path,
+		`CREATE TABLE IF NOT EXISTS subdomain (
+			domain        TEXT NOT NULL,
+			name          TEXT NOT NULL,
+			source        TEXT NOT NULL,
+			ips           TEXT NOT NULL,
+			discovered_at INTEGER NOT NULL,
+			PRIMARY KEY (domain, name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_subdomain_domain ON subdomain(domain)`,
+	)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS subdomain (
-		domain        TEXT NOT NULL,
-		name          TEXT NOT NULL,
-		source        TEXT NOT NULL,
-		ips           TEXT NOT NULL,
-		discovered_at INTEGER NOT NULL,
-		PRIMARY KEY (domain, name)
-	)`); err != nil {
-		_ = db.Close()
-		return nil, err
+	if db == nil {
+		return nil, nil
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subdomain_domain ON subdomain(domain)`); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-
 	return &Store{db: db, path: path}, nil
 }
 
@@ -68,7 +54,7 @@ func (s *Store) Load(ctx context.Context, domain string) ([]Result, error) {
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT name, source, ips FROM subdomain WHERE domain = ?`, normalize(domain))
+		`SELECT name, source, ips FROM subdomain WHERE domain = ?`, netutil.NormalizeHost(domain))
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +99,7 @@ func (s *Store) Save(ctx context.Context, domain string, results []Result) error
 				source = excluded.source,
 				ips = excluded.ips,
 				discovered_at = excluded.discovered_at`,
-			normalize(domain), result.Name, result.Source, string(ips), now); err != nil {
+			netutil.NormalizeHost(domain), result.Name, result.Source, string(ips), now); err != nil {
 			return err
 		}
 	}

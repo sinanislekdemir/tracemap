@@ -56,6 +56,10 @@ internal/origin/            keyless origin discovery behind CDNs/proxies ("unmas
 internal/netcat/            interactive TCP sessions ("nc") for floating windows
 internal/history/           saved traces/scans (SQLite snapshot store)
 internal/appdata/           shared SQLite database path (tracemap.db)
+internal/netutil/           shared host normalization/resolution/IP/dedup helpers
+internal/httputil/          shared browser User-Agent
+internal/sqliteutil/        shared SQLite open/pragmas/schema helper
+internal/ratelimit/         shared context-aware rate limiter
 frontend/src/               React app
 frontend/wailsjs/           generated bindings — do not edit by hand
 build/                      Wails build assets (appicon.png, platform files)
@@ -102,9 +106,12 @@ PLAN.md                     design/architecture document
   dialog (`ScanOptions`) chooses which techniques run; `ScanOptions.WordlistPath`
   points brute force at a user-supplied newline-delimited file via
   `subdomains.LoadWordlist` (leftmost label kept, bounded to 100k entries), and
-  `App.PickWordlist` opens a native file chooser for it. `App.Scan` emits
-  `scan:subdomains`/`scan:progress`, and `App.TraceTargets` traces a reviewed
-  selection.
+  `App.PickWordlist` opens a native file chooser for it. `Discover` reports
+  per-phase progress through `Options.OnProgress` (phase `subdomains` for brute
+  force, `ptr` for reverse DNS, `sweep` for the `/24` sweep, each with
+  done/total/found) and verbose steps through `Options.OnLog`. `App.Scan`
+  forwards these as `scan:progress` and `scan:subdomainLog`, and
+  `App.TraceTargets` traces a reviewed selection.
 - **Web crawl** (`internal/webcrawl`): pure-Go (`net/http` + `x/net/html`, no
   external binary). `Crawl` fetches the frontpage and one level of same-site
   links with a browser `User-Agent`, follows up to 10 HTTP redirects (including
@@ -126,8 +133,10 @@ PLAN.md                     design/architecture document
   port order and jitter. TCP uses a connect scan; UDP sends a protocol-specific
   datagram and reports only replies (best-effort). Optional `Probe` identifies
   the service by banner grab, HTTP `GET`/`Server` header, or TLS handshake
-  (cert CN/SAN, issuer, ALPN); on unknown ports TLS is tried before HTTP because
-  an HTTP server answers a TLS ClientHello with a misleading plaintext `400`.
+  (cert CN/SAN, issuer, ALPN) on TCP, and by reply shape/banner on UDP
+  (DNS/mDNS/NTP labels plus printable banners); on unknown ports TLS is tried
+  before HTTP because an HTTP server answers a TLS ClientHello with a misleading
+  plaintext `400`.
   Events: `portscan:open`, `portscan:progress`, `portscan:done`,
   `portscan:error`; results are not persisted. `ScanPorts` uses the shared
   `App.begin()` cancel model, so it cancels (and is cancelled by) other
@@ -158,7 +167,29 @@ PLAN.md                     design/architecture document
 - **Origin discovery** (`internal/origin`, "Unmask target"): keyless, all-local
   hunt for the true origin behind a CDN/reverse proxy. `App.UnmaskTarget`
   (own cancellation context, like `AnalyzeDomain`) reuses the last scan's
-  subdomains (`subdomains.Store.Load`) plus the apex, MX hosts, SPF `ip4:`/`ip6:`
+  subdomains (  `subdomains.Store.Load`) plus the apex, MX hosts, SPF `ip4:`/`ip6:`
+  literals and baseline certificate SANs to build candidates, then connects
+  directly to each candidate (SNI/Host pinned to the domain) and compares its
+  TLS cert SHA-256, favicon and body against the proxied baseline. Content is
+  the decisive signal (a proxy passes body/favicon through unchanged) while the
+  baseline certificate is the edge's. An address is confirmed only when it
+  serves the target's content directly, is not a current DNS answer for the
+  domain, and shows no intermediary header (`via`, `x-cache`, `age`,
+  `x-served-by`, `x-cdn`, `cdn-*` and stable CDN marker header names such as
+  `cf-ray`/`x-amz-cf-id`); a shared-edge SNI probe is supporting evidence.
+  Verdicts: confirmed/likely/proxy/dead. The intermediary marker set is
+  configurable (`internal/origin/rules.go`): `App.UnmaskRulesPath` reports the
+  user's `unmask-rules.json` location, `App.CreateUnmaskRules` copies the
+  embedded defaults there for editing (under `appdata.ConfigDir()`), and
+  `App.UnmaskTarget(domain, customRules)` loads it when requested. Events:
+  `origin:progress` (phases) and `origin:log` (verbose per-step detail); the
+  frontend renders the log in an inline LIVE LOG pane inside the modal and also
+  mirrors it to the `origin` log channel. `App.ExportOriginReport` writes a
+  text report. The frontend `OriginModal` shows the baseline and candidates,
+  offers default/custom rules, and drops a building marker on the map for
+  confirmed/likely origins. NSEC/AXFR zone enumeration is a documented phase-3
+  TODO in `internal/origin/zone.go`.
+
   literals and baseline certificate SANs to build candidates, then connects
   directly to each candidate (SNI/Host pinned to the domain) and compares its
   TLS cert SHA-256, favicon and body against the proxied baseline. Content is

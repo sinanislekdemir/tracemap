@@ -15,10 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-)
 
-// browserUA is sent on web probes so sites answer as they would to a browser.
-const browserUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+	"traceroute/internal/httputil"
+)
 
 // plainPorts are probed over plain HTTP; every other probed port uses TLS.
 var plainPorts = map[int]bool{80: true, 8080: true, 2082: true}
@@ -48,7 +47,7 @@ func probeEndpoint(ctx context.Context, domain, ip string, port int, opts Option
 	if err != nil {
 		return endpointResult{}
 	}
-	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("User-Agent", httputil.BrowserUserAgent)
 	req.Host = hostForURL(domain, port)
 
 	var state tls.ConnectionState
@@ -115,7 +114,7 @@ func fetchFavicon(ctx context.Context, client *http.Client, scheme, domain strin
 	if err != nil {
 		return nil, false
 	}
-	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("User-Agent", httputil.BrowserUserAgent)
 	req.Host = hostForURL(domain, port)
 
 	resp, err := client.Do(req)

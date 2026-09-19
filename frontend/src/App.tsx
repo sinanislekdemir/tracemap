@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
+import type { CSSProperties } from 'react';
 import {
   Cancel,
   CheckTools,
@@ -31,8 +31,26 @@ import Toolbar from './components/Toolbar';
 import TraceList from './components/TraceList';
 import TracerouteMap from './components/TracerouteMap';
 import { useFloatingWindows } from './useFloatingWindows';
+import { useSplitter } from './useSplitter';
 import { TRACE_COLORS } from './colors';
 import { buildDisplayHops, isLocated } from './traces';
+import {
+  EVENT_CRAWL,
+  EVENT_CRAWL_LOG,
+  EVENT_CRAWL_PAGE,
+  EVENT_DONE,
+  EVENT_ERROR,
+  EVENT_GEO,
+  EVENT_HOP,
+  EVENT_SCAN_DONE,
+  EVENT_SCAN_PROGRESS,
+  EVENT_SCAN_RECORDS,
+  EVENT_SCAN_TARGETS,
+  EVENT_SUBDOMAIN_LOG,
+  EVENT_SUBDOMAINS,
+  EVENT_TARGET,
+  EVENT_TARGET_GEO,
+} from './events';
 import type {
   CrawlPage,
   CrawlLogEvent,
@@ -57,21 +75,6 @@ import type {
   TraceState,
 } from './types';
 
-const EVENT_HOP = 'trace:hop';
-const EVENT_GEO = 'trace:geo';
-const EVENT_TARGET = 'trace:target';
-const EVENT_TARGET_GEO = 'trace:targetGeo';
-const EVENT_DONE = 'trace:done';
-const EVENT_ERROR = 'trace:error';
-const EVENT_SCAN_RECORDS = 'scan:records';
-const EVENT_SCAN_TARGETS = 'scan:targets';
-const EVENT_SCAN_DONE = 'scan:done';
-const EVENT_SUBDOMAINS = 'scan:subdomains';
-const EVENT_SCAN_PROGRESS = 'scan:progress';
-const EVENT_CRAWL_PAGE = 'scan:crawlPage';
-const EVENT_CRAWL = 'scan:crawl';
-const EVENT_CRAWL_LOG = 'scan:crawlLog';
-
 const MIN_SIDEBAR = 240;
 const MAX_SIDEBAR = 560;
 
@@ -79,6 +82,14 @@ const MIN_RIGHT = 240;
 const MAX_RIGHT = 560;
 
 const MAX_LOG_LINES = 2000;
+
+// Human labels for the subdomain-discovery phases reported by scan:progress.
+const SCAN_PHASE_LABELS: Record<string, string> = {
+  subdomains: 'discovering subdomains',
+  ptr: 'reverse-resolving',
+  sweep: 'sweeping /24s',
+  crawl: 'crawling',
+};
 
 const App = () => {
   const [target, setTarget] = useState('example.com');
@@ -383,6 +394,11 @@ const App = () => {
         appendLog('info', `progress · ${event.done}/${event.total} · ${event.found} found`, channel);
       }
     });
+    EventsOn(EVENT_SUBDOMAIN_LOG, (event: CrawlLogEvent) => {
+      const level: LogLevel = event.level === 'ok' || event.level === 'warn' || event.level === 'error' ? event.level : 'info';
+      openStep('subdomains');
+      appendLog(level, event.message, 'subdomains');
+    });
     EventsOn(EVENT_CRAWL_PAGE, (_event: CrawlPage) => {
       openStep('crawl');
     });
@@ -406,6 +422,7 @@ const App = () => {
       EventsOff(EVENT_SCAN_TARGETS);
       EventsOff(EVENT_SCAN_DONE);
       EventsOff(EVENT_SUBDOMAINS);
+      EventsOff(EVENT_SUBDOMAIN_LOG);
       EventsOff(EVENT_SCAN_PROGRESS);
       EventsOff(EVENT_CRAWL_PAGE);
       EventsOff(EVENT_CRAWL);
@@ -422,12 +439,24 @@ const App = () => {
     return () => window.clearInterval(id);
   }, [isLoading, startedAt]);
 
+  // clearDiscovery resets every piece of state produced by DNS discovery,
+  // crawling and origin unmasking, so a new operation or a loaded history never
+  // shows stale records, subdomains or map markers.
+  const clearDiscovery = useCallback(() => {
+    setRecords([]);
+    setSubdomains([]);
+    setSelectedSubs(new Set());
+    setScanProgress(null);
+    setTracingSubs(false);
+    setOriginMarkers([]);
+  }, []);
+
   const startOperation = useCallback(
     (nextMode: 'trace' | 'scan') => {
       busyRef.current = true;
       setMode(nextMode);
       setViewMode('live');
-      setRecords([]);
+      clearDiscovery();
       setTraces([]);
       setSelectedTraces(new Set());
       setFocusedTrace(null);
@@ -436,18 +465,13 @@ const App = () => {
       setIsLoading(true);
       setStartedAt(Date.now());
       setElapsedMs(0);
-      setSubdomains([]);
-      setSelectedSubs(new Set());
-      setScanProgress(null);
-      setTracingSubs(false);
-      setOriginMarkers([]);
       setRightbarOpen(true);
       seenPhases.current.clear();
       dismissedWindows.current.clear();
       closeWindowKinds(['dns', 'subdomains', 'crawl', 'trace']);
       setLogChannels((previous) => ({ ...previous, dns: [], subdomains: [], crawl: [], trace: [] }));
     },
-    [closeWindowKinds],
+    [clearDiscovery, closeWindowKinds],
   );
 
   const handleTrace = useCallback(() => {
@@ -579,6 +603,8 @@ const App = () => {
     setStartedAt(Date.now());
     setElapsedMs(0);
     setTracingSubs(true);
+    setScanProgress(null);
+    setOriginMarkers([]);
     openWindow('trace', { title: `TRACE · ${lastTarget || 'selected hosts'}` });
     appendLog('info', `▶ trace ${hosts.length} selected ${hosts.length === 1 ? 'host' : 'hosts'}`, 'trace');
     TraceTargets(main.TraceTargetsRequest.createFrom({ domain: lastTarget, maxHops, hosts })).catch(() => {
@@ -708,7 +734,8 @@ const App = () => {
           busyRef.current = false;
           setIsLoading(false);
           setError(null);
-          setRecords([]);
+          clearDiscovery();
+          setScanCompleted(false);
           setStartedAt(null);
           setElapsedMs(0);
           setTraces(loaded);
@@ -723,7 +750,7 @@ const App = () => {
           showToast(err instanceof Error ? err.message : 'Could not load history');
         });
     },
-    [appendLog, showToast],
+    [appendLog, clearDiscovery, showToast],
   );
 
   const handleDeleteHistory = useCallback(
@@ -753,6 +780,7 @@ const App = () => {
     setSelectedTraces(new Set());
     setFocusedTrace(null);
     setSelectedHop(null);
+    setScanCompleted(false);
     setStartedAt(null);
     setElapsedMs(0);
   }, []);
@@ -793,65 +821,27 @@ const App = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [handleCancel]);
 
-  const onSplitterDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const startX = event.clientX;
-      const startWidth = sidebarWidth;
-      const wasOpen = sidebarOpen;
-      let moved = false;
-      const onMove = (moveEvent: PointerEvent) => {
-        if (!wasOpen) {
-          return;
-        }
-        if (Math.abs(moveEvent.clientX - startX) > 3) {
-          moved = true;
-        }
-        const next = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, startWidth + moveEvent.clientX - startX));
-        setSidebarWidth(next);
-      };
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        if (!moved) {
-          setSidebarOpen((value) => !value);
-        }
-      };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-    },
-    [sidebarOpen, sidebarWidth],
-  );
+  const toggleSidebar = useCallback(() => setSidebarOpen((value) => !value), []);
+  const toggleRightbar = useCallback(() => setRightbarOpen((value) => !value), []);
 
-  const onRightSplitterDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const startX = event.clientX;
-      const startWidth = rightWidth;
-      const wasOpen = rightbarOpen;
-      let moved = false;
-      const onMove = (moveEvent: PointerEvent) => {
-        if (!wasOpen) {
-          return;
-        }
-        if (Math.abs(moveEvent.clientX - startX) > 3) {
-          moved = true;
-        }
-        const next = Math.min(MAX_RIGHT, Math.max(MIN_RIGHT, startWidth - (moveEvent.clientX - startX)));
-        setRightWidth(next);
-      };
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        if (!moved) {
-          setRightbarOpen((value) => !value);
-        }
-      };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-    },
-    [rightbarOpen, rightWidth],
-  );
+  const onSplitterDown = useSplitter({
+    startWidth: sidebarWidth,
+    open: sidebarOpen,
+    min: MIN_SIDEBAR,
+    max: MAX_SIDEBAR,
+    onWidth: setSidebarWidth,
+    onToggle: toggleSidebar,
+  });
+
+  const onRightSplitterDown = useSplitter({
+    startWidth: rightWidth,
+    open: rightbarOpen,
+    min: MIN_RIGHT,
+    max: MAX_RIGHT,
+    invert: true,
+    onWidth: setRightWidth,
+    onToggle: toggleRightbar,
+  });
 
   const openNetcat = useCallback(
     (host: string) => {
@@ -888,7 +878,9 @@ const App = () => {
         ? 'done'
         : 'ready';
 
-  const phaseLabel = scanProgress?.phase === 'crawl' ? 'crawling' : 'discovering subdomains';
+  const phaseLabel = scanProgress
+    ? SCAN_PHASE_LABELS[scanProgress.phase] ?? 'discovering subdomains'
+    : 'discovering subdomains';
   const message = error
     ? error
     : isLoading
@@ -1091,7 +1083,10 @@ const App = () => {
 
             {subdomains.length === 0 &&
               scanProgress &&
-              (scanProgress.phase === 'subdomains' || scanProgress.phase === 'crawl') && (
+              (scanProgress.phase === 'subdomains' ||
+                scanProgress.phase === 'ptr' ||
+                scanProgress.phase === 'sweep' ||
+                scanProgress.phase === 'crawl') && (
                 <div className="rightbar-section">
                   <div className="pane-head">
                     <span>SUBDOMAINS</span>
@@ -1099,7 +1094,7 @@ const App = () => {
                   </div>
                   <div className="sub-scroll">
                     <div className="sub-waiting">
-                      {scanProgress.phase === 'crawl' ? 'crawling' : 'discovering'}
+                      {SCAN_PHASE_LABELS[scanProgress.phase] ?? 'discovering'}
                       {scanProgress.total > 0 ? ` · ${scanProgress.done}/${scanProgress.total}` : '…'}
                     </div>
                   </div>

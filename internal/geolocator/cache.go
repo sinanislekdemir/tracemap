@@ -3,11 +3,9 @@ package geolocator
 import (
 	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"traceroute/internal/sqliteutil"
 )
 
 // cacheTTL is how long a cached reply is considered fresh. Geolocation data is
@@ -24,35 +22,23 @@ type geoStore struct {
 // openStore opens (creating if needed) the SQLite cache at path. An empty path
 // disables the cache and returns (nil, nil).
 func openStore(path string) (*geoStore, error) {
-	if path == "" {
-		return nil, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-
-	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sqliteutil.Open(path,
+		`CREATE TABLE IF NOT EXISTS geo_cache (
+			ip         TEXT PRIMARY KEY,
+			lat        REAL NOT NULL,
+			lon        REAL NOT NULL,
+			city       TEXT NOT NULL,
+			country    TEXT NOT NULL,
+			asn        TEXT NOT NULL,
+			fetched_at INTEGER NOT NULL
+		)`,
+	)
 	if err != nil {
 		return nil, err
 	}
-	// A single connection keeps concurrent writers from tripping SQLite's
-	// database lock; lookups are rate limited anyway.
-	db.SetMaxOpenConns(1)
-
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS geo_cache (
-		ip         TEXT PRIMARY KEY,
-		lat        REAL NOT NULL,
-		lon        REAL NOT NULL,
-		city       TEXT NOT NULL,
-		country    TEXT NOT NULL,
-		asn        TEXT NOT NULL,
-		fetched_at INTEGER NOT NULL
-	)`); err != nil {
-		_ = db.Close()
-		return nil, err
+	if db == nil {
+		return nil, nil
 	}
-
 	return &geoStore{db: db, path: path}, nil
 }
 

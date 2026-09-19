@@ -8,13 +8,16 @@ import (
 	"net/http/httptrace"
 	"sort"
 	"strings"
+
+	"traceroute/internal/httputil"
+	"traceroute/internal/netutil"
 )
 
 // baseline fetches the target through its normal resolution path (so it hits
 // the proxy) and captures the fingerprint to compare candidates against.
 func baseline(ctx context.Context, domain string, opts Options) Baseline {
 	base := Baseline{Headers: map[string]string{}}
-	base.ProxiedIPs = resolveIPs(ctx, opts.Resolver, domain)
+	base.ProxiedIPs = netutil.ResolveIPs(ctx, opts.Resolver, domain)
 
 	client := opts.HTTPClient
 	if client == nil {
@@ -25,7 +28,7 @@ func baseline(ctx context.Context, domain string, opts Options) Baseline {
 	if err != nil {
 		return base
 	}
-	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("User-Agent", httputil.BrowserUserAgent)
 	req.Host = domain
 
 	var state tls.ConnectionState
@@ -126,19 +129,5 @@ func proxyHeaders(header http.Header, rules Rules) []string {
 		}
 	}
 	sort.Strings(found)
-	return dedupe(found)
-}
-
-// dedupe removes adjacent duplicates from a sorted slice.
-func dedupe(values []string) []string {
-	if len(values) < 2 {
-		return values
-	}
-	out := values[:1]
-	for _, value := range values[1:] {
-		if value != out[len(out)-1] {
-			out = append(out, value)
-		}
-	}
-	return out
+	return netutil.Dedupe(found)
 }

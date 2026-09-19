@@ -18,6 +18,8 @@ import (
 	"github.com/oschwald/maxminddb-golang"
 
 	"traceroute/internal/appdata"
+	"traceroute/internal/netutil"
+	"traceroute/internal/ratelimit"
 )
 
 // GeoData is the resolved geographic information for an IP address.
@@ -50,7 +52,7 @@ type Resolver struct {
 	lookup  LookupFunc
 	local   LocalLookup
 	store   *geoStore
-	limiter *rateLimiter
+	limiter *ratelimit.Limiter
 	closers []io.Closer
 
 	attemptTimeout time.Duration
@@ -69,6 +71,10 @@ const (
 	defaultParallelism    = 16
 	breakerFailureLimit   = 3
 	breakerCooldown       = 30 * time.Second
+
+	// defaultRatePerSecond caps remote lookups so the service is never hit more
+	// than twice per second.
+	defaultRatePerSecond = 2
 )
 
 // errRemoteUnavailable is returned when the circuit breaker is open and no
@@ -109,7 +115,7 @@ func newResolver(lookup LookupFunc, local LocalLookup) *Resolver {
 		cache:          make(map[string]GeoData),
 		client:         &http.Client{Timeout: 4 * time.Second},
 		local:          local,
-		limiter:        newRateLimiter(defaultRatePerSecond),
+		limiter:        ratelimit.New(defaultRatePerSecond),
 		attemptTimeout: defaultAttemptTimeout,
 		maxAttempts:    defaultMaxAttempts,
 		parallelism:    defaultParallelism,
@@ -135,7 +141,7 @@ func (r *Resolver) Close() error {
 // ResolveOne returns the geo-location for a single IP. Private, loopback and
 // otherwise non-routable addresses are reported as unresolved without a lookup.
 func (r *Resolver) ResolveOne(ctx context.Context, ip string) (GeoData, error) {
-	if !isPublicIP(ip) {
+	if !netutil.IsPublicIP(ip) {
 		return GeoData{City: "Private network"}, nil
 	}
 
@@ -211,7 +217,7 @@ func (r *Resolver) resolveRemote(ctx context.Context, ip string) (GeoData, error
 				return GeoData{}, lastErr
 			}
 		}
-		if err := r.limiter.wait(ctx); err != nil {
+		if err := r.limiter.Wait(ctx); err != nil {
 			if lastErr != nil {
 				return GeoData{}, lastErr
 			}
@@ -477,20 +483,6 @@ func (r *Resolver) lookupHTTP(ctx context.Context, ip string) (GeoData, error) {
 		ASN:      asn,
 		Resolved: true,
 	}, nil
-}
-
-// isPublicIP reports whether ip is a routable address suitable for geolocation.
-func isPublicIP(ip string) bool {
-	parsed := net.ParseIP(ip)
-	if parsed == nil {
-		return false
-	}
-	if parsed.IsLoopback() || parsed.IsPrivate() || parsed.IsUnspecified() ||
-		parsed.IsLinkLocalUnicast() || parsed.IsLinkLocalMulticast() ||
-		parsed.IsMulticast() {
-		return false
-	}
-	return true
 }
 
 // Local GeoLite2 database support. The databases are optional: when none is

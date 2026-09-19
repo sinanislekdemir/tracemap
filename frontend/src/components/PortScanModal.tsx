@@ -2,6 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { Cancel, ScanPorts } from '../../wailsjs/go/main/App';
 import { main } from '../../wailsjs/go/models';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
+import Modal from './Modal';
+import { useEscape } from '../useEscape';
+import {
+  EVENT_PORT_DONE,
+  EVENT_PORT_ERROR,
+  EVENT_PORT_OPEN,
+  EVENT_PORT_PROGRESS,
+} from '../events';
 import type {
   LogLevel,
   PortResult,
@@ -9,11 +17,6 @@ import type {
   PortScanOptions,
   PortScanProgress,
 } from '../types';
-
-const EVENT_PORT_OPEN = 'portscan:open';
-const EVENT_PORT_PROGRESS = 'portscan:progress';
-const EVENT_PORT_DONE = 'portscan:done';
-const EVENT_PORT_ERROR = 'portscan:error';
 
 type Phase = 'options' | 'scanning' | 'done';
 
@@ -154,21 +157,7 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
     onClose();
   };
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        if (phase === 'scanning') {
-          Cancel();
-        }
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, phase, onClose]);
+  useEscape(open, handleClose);
 
   const sortedResults = useMemo(
     () => [...results].sort((a, b) => a.port - b.port),
@@ -212,28 +201,47 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
   const percent = progress && progress.total > 0 ? (progress.done / progress.total) * 100 : 0;
 
   return (
-    <div className="modal-backdrop" onClick={handleClose}>
-      <div
-        className="modal modal--scan modal--ports"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Port scan"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-head">
-          <div>
-            <div className="modal-title">PORT SCAN</div>
-            <div className="modal-sub selectable">
-              {label ? `${label} · ` : ''}
-              {host}
-            </div>
-          </div>
-          <button type="button" className="modal-close" onClick={handleClose} aria-label="Close">
-            ×
-          </button>
-        </div>
-
-        <div className="modal-body">
+    <Modal
+      title="PORT SCAN"
+      subtitle={
+        <>
+          {label ? `${label} · ` : ''}
+          {host}
+        </>
+      }
+      ariaLabel="Port scan"
+      variant="modal--ports"
+      onClose={handleClose}
+      footer={
+        <>
+          {phase === 'options' && (
+            <>
+              <button type="button" className="btn" onClick={handleClose}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn--primary" disabled={!canStart} onClick={start}>
+                Start scan
+              </button>
+            </>
+          )}
+          {phase === 'scanning' && (
+            <button type="button" className="btn" onClick={() => Cancel()}>
+              Stop
+            </button>
+          )}
+          {phase === 'done' && (
+            <>
+              <button type="button" className="btn" onClick={handleClose}>
+                Close
+              </button>
+              <button type="button" className="btn btn--primary" disabled={!canStart} onClick={start}>
+                Rescan
+              </button>
+            </>
+          )}
+        </>
+      }
+    >
           {phase === 'options' ? (
             <>
               <div className="scan-group">
@@ -326,7 +334,9 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
                   />
                   <span className="scan-option-main">
                     <span className="scan-option-label">Identify protocols</span>
-                    <span className="scan-option-hint">Banner grab, HTTP request and TLS handshake on open ports</span>
+                    <span className="scan-option-hint">
+                      Banner grab, HTTP request and TLS handshake on TCP ports; protocol-specific replies on UDP
+                    </span>
                   </span>
                 </label>
                 {options.protocol === 'udp' && (
@@ -436,37 +446,7 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
               )}
             </>
           )}
-        </div>
-
-        <div className="modal-foot">
-          {phase === 'options' && (
-            <>
-              <button type="button" className="btn" onClick={handleClose}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn--primary" disabled={!canStart} onClick={start}>
-                Start scan
-              </button>
-            </>
-          )}
-          {phase === 'scanning' && (
-            <button type="button" className="btn" onClick={() => Cancel()}>
-              Stop
-            </button>
-          )}
-          {phase === 'done' && (
-            <>
-              <button type="button" className="btn" onClick={handleClose}>
-                Close
-              </button>
-              <button type="button" className="btn btn--primary" disabled={!canStart} onClick={start}>
-                Rescan
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

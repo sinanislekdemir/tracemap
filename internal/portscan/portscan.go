@@ -182,8 +182,15 @@ func (s *Scanner) scanPort(ctx context.Context, ip, host string, port int, proto
 	result := Result{Port: port, Protocol: protocol, Service: ServiceName(port)}
 
 	if protocol == "udp" {
-		if !s.scanUDP(ip, port, timeout) {
+		payload, ok := s.scanUDP(ip, port, timeout)
+		if !ok {
 			return Result{}, false
+		}
+		if probe {
+			product, detail, banner := identifyUDP(port, payload)
+			result.Product = product
+			result.Detail = detail
+			result.Banner = banner
 		}
 		return result, true
 	}
@@ -216,11 +223,12 @@ func (s *Scanner) dial(ctx context.Context, ip string, port int, timeout time.Du
 	return dial(dctx, "tcp", net.JoinHostPort(ip, strconv.Itoa(port)))
 }
 
-// scanUDP sends a probe datagram and reports whether a reply arrives.
-func (s *Scanner) scanUDP(ip string, port int, timeout time.Duration) bool {
+// scanUDP sends a probe datagram and returns the reply payload together with
+// whether any reply arrived.
+func (s *Scanner) scanUDP(ip string, port int, timeout time.Duration) ([]byte, bool) {
 	conn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP(ip), Port: port})
 	if err != nil {
-		return false
+		return nil, false
 	}
 	defer conn.Close()
 
@@ -230,12 +238,17 @@ func (s *Scanner) scanUDP(ip string, port int, timeout time.Duration) bool {
 		payload = []byte{0x00}
 	}
 	if _, err := conn.Write(payload); err != nil {
-		return false
+		return nil, false
 	}
 
-	buf := make([]byte, 1024)
+	buf := make([]byte, 4096)
 	n, err := conn.Read(buf)
-	return err == nil && n > 0
+	if err != nil || n == 0 {
+		return nil, false
+	}
+	reply := make([]byte, n)
+	copy(reply, buf[:n])
+	return reply, true
 }
 
 // resolve turns host into a single address to scan, preferring IPv4.

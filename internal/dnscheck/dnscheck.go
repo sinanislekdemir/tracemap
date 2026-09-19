@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+
+	"traceroute/internal/netutil"
 )
 
 // Record is a single DNS answer.
@@ -248,7 +250,7 @@ func Expand(ctx context.Context, resolver Resolver, domain string, records []Rec
 		maxDepth = MaxNSDepth
 	}
 
-	seenHost := map[string]bool{normalizeHost(domain): true}
+	seenHost := map[string]bool{netutil.NormalizeHost(domain): true}
 	seenRecord := make(map[string]bool, len(records))
 	out := make([]Record, 0, len(records))
 	add := func(record Record) {
@@ -311,13 +313,13 @@ func nsHosts(records []Record) []string {
 func recordHost(record Record) (string, bool) {
 	switch record.Type {
 	case "NS":
-		return normalizeHost(record.Value), true
+		return netutil.NormalizeHost(record.Value), true
 	case "SOA":
 		fields := strings.Fields(record.Value)
 		if len(fields) == 0 {
 			return "", false
 		}
-		return normalizeHost(fields[0]), true
+		return netutil.NormalizeHost(fields[0]), true
 	default:
 		return "", false
 	}
@@ -333,7 +335,7 @@ func soaHosts(value string) []string {
 	hosts := make([]string, 0, len(fields))
 	seen := map[string]bool{}
 	for _, field := range fields {
-		host := normalizeHost(field)
+		host := netutil.NormalizeHost(field)
 		if host == "" || seen[host] {
 			continue
 		}
@@ -343,16 +345,11 @@ func soaHosts(value string) []string {
 	return hosts
 }
 
-// normalizeHost lowercases a hostname and strips a trailing root dot.
-func normalizeHost(host string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-}
-
 // Targets derives the addresses to trace: the A/AAAA addresses directly, plus
 // the addresses behind MX hostnames and the nameservers named by NS/SOA
 // records. Duplicates are removed and the result is capped at MaxTargets.
 func Targets(ctx context.Context, resolver Resolver, domain string, records []Record) []Target {
-	return capTargets(AllTargets(ctx, resolver, domain, records), MaxTargets)
+	return netutil.Cap(AllTargets(ctx, resolver, domain, records), MaxTargets)
 }
 
 // AllTargets is Targets without the MaxTargets cap, so callers can add further
@@ -403,13 +400,5 @@ func AllTargets(ctx context.Context, resolver Resolver, domain string, records [
 		}
 	}
 
-	return targets
-}
-
-// capTargets truncates targets to limit when limit > 0.
-func capTargets(targets []Target, limit int) []Target {
-	if limit > 0 && len(targets) > limit {
-		return targets[:limit]
-	}
 	return targets
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"traceroute/internal/geolocator"
+	"traceroute/internal/netutil"
 	"traceroute/internal/subdomains"
 )
 
@@ -148,7 +149,7 @@ const (
 // Discover mines candidate addresses from the domain's DNS footprint and
 // verifies each one directly.
 func Discover(ctx context.Context, domain string, opts Options) Report {
-	domain = normalizeDomain(domain)
+	domain = netutil.NormalizeDomain(domain)
 	opts = withDefaults(opts)
 
 	report := Report{Domain: domain}
@@ -382,18 +383,6 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
-}
-
-// normalizeDomain trims a scheme, path and trailing dot from a target.
-func normalizeDomain(domain string) string {
-	domain = strings.TrimSpace(strings.ToLower(domain))
-	if i := strings.Index(domain, "://"); i >= 0 {
-		domain = domain[i+3:]
-	}
-	if i := strings.IndexAny(domain, "/?#"); i >= 0 {
-		domain = domain[:i]
-	}
-	return strings.TrimSuffix(domain, ".")
 }
 
 // FormatReport renders a report as plain text for export.

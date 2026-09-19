@@ -7,10 +7,9 @@ import (
 	"net/http/httptrace"
 	"strings"
 	"time"
-)
 
-// browserUA is sent on web probes so sites answer as they would to a browser.
-const browserUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+	"traceroute/internal/httputil"
+)
 
 // securityHeaderNames are the response headers reported and graded.
 var securityHeaderNames = []string{
@@ -31,7 +30,7 @@ func (a *Analyzer) webReport(ctx context.Context, domain string) WebReport {
 	noRedirect := *a.httpClient
 	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+domain+"/", nil); err == nil {
-		req.Header.Set("User-Agent", browserUA)
+		req.Header.Set("User-Agent", httputil.BrowserUserAgent)
 		if resp, err := noRedirect.Do(req); err == nil {
 			location := strings.ToLower(resp.Header.Get("Location"))
 			if resp.StatusCode >= 300 && resp.StatusCode < 400 && strings.HasPrefix(location, "https://") {
@@ -54,7 +53,7 @@ func (a *Analyzer) webReport(ctx context.Context, domain string) WebReport {
 		report.Error = err.Error()
 		return report
 	}
-	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("User-Agent", httputil.BrowserUserAgent)
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {

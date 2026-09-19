@@ -16,6 +16,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"traceroute/internal/httputil"
+	"traceroute/internal/netutil"
 )
 
 // Resolver is the subset of net.Resolver used to turn discovered hostnames
@@ -113,7 +116,7 @@ const (
 
 	// DefaultUserAgent is a current desktop Chrome string, so sites that vary
 	// their response by client serve the crawler the regular page.
-	DefaultUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+	DefaultUserAgent = httputil.BrowserUserAgent
 )
 
 // crawler holds the mutable state of a single crawl.
@@ -141,7 +144,7 @@ type crawler struct {
 // Crawl fetches domain's frontpage and one level of same-site links, parses
 // robots.txt and sitemap.xml, and returns every in-domain subdomain it saw.
 func Crawl(ctx context.Context, domain string, opts Options) Result {
-	domain = normalizeHost(domain)
+	domain = netutil.NormalizeHost(domain)
 	opts = withDefaults(opts)
 
 	c := &crawler{
@@ -180,7 +183,7 @@ func Crawl(ctx context.Context, domain string, opts Options) Result {
 	if err != nil {
 		base = nil
 	} else {
-		c.siteHost = normalizeHost(base.Hostname())
+		c.siteHost = netutil.NormalizeHost(base.Hostname())
 		c.logf("ok", "frontpage · %s · %d links", c.siteHost, len(page.Links))
 	}
 
@@ -346,7 +349,7 @@ func (c *crawler) level1Candidates(page *Page, base *url.URL) []string {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 			return
 		}
-		if !c.sameSite(normalizeHost(u.Hostname())) {
+		if !c.sameSite(netutil.NormalizeHost(u.Hostname())) {
 			return
 		}
 		if seen[raw] {
@@ -395,10 +398,10 @@ func (c *crawler) sameSite(host string) bool {
 	if host == "" {
 		return false
 	}
-	if isSameSite(host, c.domain) {
+	if netutil.IsSameSite(host, c.domain) {
 		return true
 	}
-	if c.siteHost != "" && (host == c.siteHost || isStrictSubdomain(host, c.siteHost)) {
+	if c.siteHost != "" && netutil.IsSameSite(host, c.siteHost) {
 		return true
 	}
 	return false
@@ -522,13 +525,13 @@ func (c *crawler) toPage(resp response, depth int) Page {
 	hosts := make(map[string]bool)
 	for _, link := range links {
 		if u, err := url.Parse(link); err == nil {
-			if host := normalizeHost(u.Hostname()); host != "" {
+			if host := netutil.NormalizeHost(u.Hostname()); host != "" {
 				hosts[host] = true
 			}
 		}
 		c.addURL(link)
 	}
-	page.Hosts = keys(hosts)
+	page.Hosts = netutil.SortedKeys(hosts)
 	return page
 }
 
@@ -538,13 +541,13 @@ func (c *crawler) addURL(raw string) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return
 	}
-	host := normalizeHost(u.Hostname())
+	host := netutil.NormalizeHost(u.Hostname())
 	if host == "" {
 		return
 	}
 	c.mu.Lock()
 	c.urls[raw] = true
-	if isStrictSubdomain(host, c.domain) {
+	if netutil.IsStrictSubdomain(host, c.domain) {
 		c.hosts[host] = true
 	}
 	c.mu.Unlock()
@@ -602,8 +605,8 @@ func (c *crawler) result(ctx context.Context) Result {
 	pages := append([]Page(nil), c.pages...)
 	robots := c.robots
 	sitemaps := append([]Sitemap(nil), c.sitemaps...)
-	urls := keys(c.urls)
-	hosts := keys(c.hosts)
+	urls := netutil.SortedKeys(c.urls)
+	hosts := netutil.SortedKeys(c.hosts)
 	c.mu.Unlock()
 
 	sort.Slice(pages, func(i, j int) bool { return pages[i].URL < pages[j].URL })
@@ -623,14 +626,7 @@ func (c *crawler) result(ctx context.Context) Result {
 
 // resolve turns a hostname into sorted IP strings.
 func (c *crawler) resolve(ctx context.Context, host string) []string {
-	ips, err := c.resolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(ips))
-	for _, ip := range ips {
-		out = append(out, ip.String())
-	}
+	out := netutil.ResolveIPs(ctx, c.resolver, host)
 	sort.Strings(out)
 	return out
 }
@@ -667,14 +663,4 @@ func resolvePath(base *url.URL, path string) string {
 		path = "/" + path
 	}
 	return base.Scheme + "://" + base.Host + path
-}
-
-// keys returns the sorted keys of a set.
-func keys(set map[string]bool) []string {
-	out := make([]string, 0, len(set))
-	for key := range set {
-		out = append(out, key)
-	}
-	sort.Strings(out)
-	return out
 }

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"traceroute/internal/netutil"
 )
 
 // Check statuses, from best to worst.
@@ -267,20 +269,11 @@ func fillDerived(reg *Registration) {
 	}
 }
 
-// NormalizeDomain lowercases a domain and strips a scheme, path or trailing
-// dot, returning "" when nothing usable remains.
+// NormalizeDomain lowercases a domain and strips a scheme, path, port or
+// trailing dot, returning "" when nothing usable remains. It delegates to
+// netutil so every feature normalizes hostnames identically.
 func NormalizeDomain(input string) string {
-	domain := strings.TrimSpace(strings.ToLower(input))
-	domain = strings.TrimPrefix(domain, "http://")
-	domain = strings.TrimPrefix(domain, "https://")
-	if at := strings.IndexAny(domain, "/?#"); at >= 0 {
-		domain = domain[:at]
-	}
-	domain = strings.TrimSuffix(domain, ".")
-	if host, _, err := net.SplitHostPort(domain); err == nil {
-		domain = host
-	}
-	return domain
+	return netutil.NormalizeDomain(input)
 }
 
 // tld returns the last label of a domain.

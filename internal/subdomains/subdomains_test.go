@@ -5,6 +5,8 @@ import (
 	"net"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -249,6 +251,73 @@ func TestParseSPFHosts(t *testing.T) {
 	if len(hosts) != len(want) {
 		t.Errorf("got %d SPF hosts, want %d: %v", len(hosts), len(want), hosts)
 	}
+}
+
+func TestSweep24ReportsProgressAndLogs(t *testing.T) {
+	resolver := fakeResolver{
+		ips: map[string][]net.IP{"example.com": {net.ParseIP("1.1.1.1")}},
+		ptr: map[string][]string{
+			"1.1.1.1": {"host1.example.com."},
+			"1.1.1.5": {"host5.example.com."},
+		},
+	}
+
+	var mu sync.Mutex
+	totals := map[string]int{}
+	logs := []string{}
+	opts := fastOpts(Options{
+		PTR:             true,
+		Sweep24:         true,
+		MaxPTRNetblocks: 1,
+		OnProgress: func(phase string, done, total, found int) {
+			mu.Lock()
+			defer mu.Unlock()
+			if total > 0 {
+				totals[phase] = total
+			}
+		},
+		OnLog: func(level, message string) {
+			mu.Lock()
+			defer mu.Unlock()
+			logs = append(logs, message)
+		},
+	})
+
+	results := Discover(context.Background(), resolver, "example.com", opts, nil)
+	names := resultNames(results)
+	if !containsName(names, "host1.example.com") || !containsName(names, "host5.example.com") {
+		t.Fatalf("sweep results missing: %v", names)
+	}
+	if totals["sweep"] != maxPTRHostsPerNetblock {
+		t.Errorf("sweep total = %d, want %d", totals["sweep"], maxPTRHostsPerNetblock)
+	}
+	if _, ok := totals["ptr"]; !ok {
+		t.Error("no ptr progress was reported")
+	}
+	if !anyContains(logs, "sweeping 1.1.1.0/24") {
+		t.Errorf("missing sweep log line: %v", logs)
+	}
+	if !anyContains(logs, "host5.example.com") {
+		t.Errorf("missing discovered-name log line: %v", logs)
+	}
+}
+
+func containsName(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
+}
+
+func anyContains(lines []string, want string) bool {
+	for _, line := range lines {
+		if strings.Contains(line, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestParseSPFIPs(t *testing.T) {

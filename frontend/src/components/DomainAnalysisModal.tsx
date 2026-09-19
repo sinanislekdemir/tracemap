@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { AnalyzeDomain, CancelDomainAnalysis, ExportDomainReport } from '../../wailsjs/go/main/App';
 import { domaincheck } from '../../wailsjs/go/models';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
+import Modal from './Modal';
+import { useEscape } from '../useEscape';
+import { formatDateMs, joinList } from '../format';
+import { EVENT_DOMAIN_PROGRESS } from '../events';
 import type { CheckStatus, DomainProgressEvent, LogLevel } from '../types';
-
-const EVENT_DOMAIN_PROGRESS = 'domain:progress';
 
 type Phase = 'options' | 'running' | 'done';
 
@@ -22,15 +24,6 @@ const STATUS_LABELS: Record<CheckStatus, string> = {
   fail: 'FAIL',
   info: 'INFO',
 };
-
-const formatMs = (ms?: number): string => {
-  if (!ms) {
-    return '—';
-  }
-  return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-};
-
-const join = (values?: string[]): string => (values && values.length > 0 ? values.join(', ') : '—');
 
 interface DomainAnalysisModalProps {
   open: boolean;
@@ -75,25 +68,14 @@ const DomainAnalysisModal = ({
     return () => off();
   }, [open, onLog]);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        handleClose();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  });
-
   const handleClose = () => {
     if (phase === 'running') {
       void CancelDomainAnalysis();
     }
     onClose();
   };
+
+  useEscape(open, handleClose);
 
   const start = () => {
     const trimmed = domain.trim();
@@ -164,27 +146,41 @@ const DomainAnalysisModal = ({
   );
 
   return (
-    <div className="modal-backdrop" onClick={handleClose}>
-      <div
-        className="modal modal--scan modal--domain"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Domain analysis"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-head">
-          <div>
-            <div className="modal-title">DOMAIN ANALYSIS</div>
-            <div className="modal-sub selectable">
-              WHOIS / RDAP · DNS · email auth · TLS &amp; headers
-            </div>
-          </div>
-          <button type="button" className="modal-close" onClick={handleClose} aria-label="Close">
-            ×
-          </button>
-        </div>
-
-        <div className="modal-body">
+    <Modal
+      title="DOMAIN ANALYSIS"
+      subtitle={<>WHOIS / RDAP · DNS · email auth · TLS &amp; headers</>}
+      ariaLabel="Domain analysis"
+      variant="modal--domain"
+      onClose={handleClose}
+      footer={
+        <>
+          {phase === 'running' ? (
+            <button type="button" className="btn" onClick={() => void CancelDomainAnalysis()}>
+              Stop
+            </button>
+          ) : (
+            <>
+              <button type="button" className="btn" onClick={handleClose}>
+                Close
+              </button>
+              {report && (
+                <button type="button" className="btn" onClick={handleExport}>
+                  Export
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={domain.trim() === ''}
+                onClick={start}
+              >
+                {report ? 'Re-analyze' : 'Analyze'}
+              </button>
+            </>
+          )}
+        </>
+      }
+    >
           <div className="scan-fields">
             <div className="field field--target">
               <label className="field-label" htmlFor="domain-analysis-target">
@@ -236,7 +232,7 @@ const DomainAnalysisModal = ({
                 <div className="domain-score-meta">
                   <span className="domain-score-value selectable">{report.score}/100</span>
                   <span className="domain-score-domain selectable">{report.domain}</span>
-                  <span className="domain-score-date">analyzed {formatMs(report.analyzedAt)}</span>
+                  <span className="domain-score-date">analyzed {formatDateMs(report.analyzedAt)}</span>
                 </div>
                 <div className="domain-tally">
                   <span className="check-chip check-chip--pass">{counts?.pass ?? 0} pass</span>
@@ -278,15 +274,15 @@ const DomainAnalysisModal = ({
                     </div>
                     <div className="domain-row">
                       <span>Created</span>
-                      <span className="selectable">{formatMs(report.registration.createdAt)}</span>
+                      <span className="selectable">{formatDateMs(report.registration.createdAt)}</span>
                     </div>
                     <div className="domain-row">
                       <span>Updated</span>
-                      <span className="selectable">{formatMs(report.registration.updatedAt)}</span>
+                      <span className="selectable">{formatDateMs(report.registration.updatedAt)}</span>
                     </div>
                     <div className="domain-row">
                       <span>Expires</span>
-                      <span className="selectable">{formatMs(report.registration.expiresAt)}</span>
+                      <span className="selectable">{formatDateMs(report.registration.expiresAt)}</span>
                     </div>
                     <div className="domain-row">
                       <span>Registrant</span>
@@ -297,11 +293,11 @@ const DomainAnalysisModal = ({
                     </div>
                     <div className="domain-row">
                       <span>Nameservers</span>
-                      <span className="selectable">{join(report.registration.nameservers)}</span>
+                      <span className="selectable">{joinList(report.registration.nameservers)}</span>
                     </div>
                     <div className="domain-row">
                       <span>Status</span>
-                      <span className="selectable">{join(report.registration.statuses)}</span>
+                      <span className="selectable">{joinList(report.registration.statuses)}</span>
                     </div>
                   </div>
                 </div>
@@ -312,45 +308,45 @@ const DomainAnalysisModal = ({
                 <div className="domain-table">
                   <div className="domain-row">
                     <span>Addresses</span>
-                    <span className="selectable">{join(report.dns.addresses)}</span>
+                    <span className="selectable">{joinList(report.dns.addresses)}</span>
                   </div>
                   <div className="domain-row">
                     <span>Nameservers</span>
-                    <span className="selectable">{join(report.dns.nameservers)}</span>
+                    <span className="selectable">{joinList(report.dns.nameservers)}</span>
                   </div>
                   <div className="domain-row">
                     <span>MX</span>
-                    <span className="selectable">{join(report.dns.mx)}</span>
+                    <span className="selectable">{joinList(report.dns.mx)}</span>
                   </div>
                   <div className="domain-row">
                     <span>SPF</span>
                     <span className="selectable">
-                      {join(report.dns.spf)}
+                      {joinList(report.dns.spf)}
                       {report.dns.spf?.length ? ` · policy ${report.dns.spfPolicy ?? 'none'} · ${report.dns.spfLookups} lookups` : ''}
                     </span>
                   </div>
                   <div className="domain-row">
                     <span>DMARC</span>
                     <span className="selectable">
-                      {join(report.dns.dmarc)}
+                      {joinList(report.dns.dmarc)}
                       {report.dns.dmarc?.length ? ` · p=${report.dns.dmarcPolicy ?? 'none'}` : ''}
                     </span>
                   </div>
                   <div className="domain-row">
                     <span>DKIM</span>
-                    <span className="selectable">{join(report.dns.dkim)}</span>
+                    <span className="selectable">{joinList(report.dns.dkim)}</span>
                   </div>
                   <div className="domain-row">
                     <span>CAA</span>
-                    <span className="selectable">{join(report.dns.caa)}</span>
+                    <span className="selectable">{joinList(report.dns.caa)}</span>
                   </div>
                   <div className="domain-row">
                     <span>MTA-STS</span>
-                    <span className="selectable">{join(report.dns.mtaSts)}</span>
+                    <span className="selectable">{joinList(report.dns.mtaSts)}</span>
                   </div>
                   <div className="domain-row">
                     <span>TLS-RPT</span>
-                    <span className="selectable">{join(report.dns.tlsRpt)}</span>
+                    <span className="selectable">{joinList(report.dns.tlsRpt)}</span>
                   </div>
                 </div>
               </div>
@@ -373,7 +369,7 @@ const DomainAnalysisModal = ({
                     <span>Certificate</span>
                     <span className="selectable">
                       {report.web.certSubject || '—'} · issuer {report.web.certIssuer || '—'} · expires{' '}
-                      {formatMs(report.web.certNotAfter)}
+                      {formatDateMs(report.web.certNotAfter)}
                       {report.web.certNotAfter ? ` (${report.web.certDaysLeft}d)` : ''}
                     </span>
                   </div>
@@ -395,36 +391,7 @@ const DomainAnalysisModal = ({
           )}
 
           {exportPath && <div className="domain-export-path selectable">Saved to {exportPath}</div>}
-        </div>
-
-        <div className="modal-foot">
-          {phase === 'running' ? (
-            <button type="button" className="btn" onClick={() => void CancelDomainAnalysis()}>
-              Stop
-            </button>
-          ) : (
-            <>
-              <button type="button" className="btn" onClick={handleClose}>
-                Close
-              </button>
-              {report && (
-                <button type="button" className="btn" onClick={handleExport}>
-                  Export
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={domain.trim() === ''}
-                onClick={start}
-              >
-                {report ? 'Re-analyze' : 'Analyze'}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

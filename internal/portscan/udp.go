@@ -28,3 +28,44 @@ func udpProbePayload(port int) []byte {
 		return nil
 	}
 }
+
+// identifyUDP labels a UDP reply. Known services are recognised from the reply
+// shape; any other reply with enough printable content is kept as a banner.
+func identifyUDP(port int, payload []byte) (product, detail, banner string) {
+	switch port {
+	case 53:
+		if isDNSResponse(payload) {
+			return "DNS", "dns response", ""
+		}
+	case 5353:
+		if isDNSResponse(payload) {
+			return "mDNS", "mdns response", ""
+		}
+	case 123:
+		if len(payload) >= 48 {
+			return "NTP", "ntp response", ""
+		}
+	}
+	if hasPrintable(payload) {
+		return "", "", sanitizeBanner(payload)
+	}
+	return "", "", ""
+}
+
+// isDNSResponse reports whether payload looks like a DNS message with the QR
+// (response) bit set.
+func isDNSResponse(payload []byte) bool {
+	return len(payload) >= 12 && payload[2]&0x80 != 0
+}
+
+// hasPrintable reports whether payload is mostly printable text, so opaque
+// binary replies are not surfaced as a misleading banner.
+func hasPrintable(payload []byte) bool {
+	printable := 0
+	for _, c := range payload {
+		if c == '\r' || c == '\n' || c == '\t' || (c >= 32 && c < 127) {
+			printable++
+		}
+	}
+	return printable >= 4 && printable*2 >= len(payload)
+}

@@ -21,6 +21,7 @@ import (
 	"traceroute/internal/geolocator"
 	"traceroute/internal/history"
 	"traceroute/internal/netcat"
+	"traceroute/internal/netutil"
 	"traceroute/internal/origin"
 	"traceroute/internal/portscan"
 	"traceroute/internal/subdomains"
@@ -40,6 +41,7 @@ const (
 	EventScanTargets    = "scan:targets"
 	EventScanDone       = "scan:done"
 	EventSubdomains     = "scan:subdomains"
+	EventSubdomainLog   = "scan:subdomainLog"
 	EventScanProgress   = "scan:progress"
 	EventCrawlPage      = "scan:crawlPage"
 	EventCrawl          = "scan:crawl"
@@ -271,15 +273,11 @@ type App struct {
 	nc     *netcat.Manager
 	domain *domaincheck.Analyzer
 
-	mu     sync.Mutex
-	gen    uint64
-	cancel context.CancelFunc
-
-	domainMu     sync.Mutex
-	domainCancel context.CancelFunc
-
-	originMu     sync.Mutex
-	originCancel context.CancelFunc
+	// Each independent operation family owns a canceler so a run cannot
+	// accidentally clear a newer run's cancellation handle.
+	ops       canceler
+	domainOps canceler
+	originOps canceler
 }
 
 // NewApp creates the application backend.
@@ -354,24 +352,7 @@ func (a *App) PickWordlist() (string, error) {
 // begin cancels any running operation and returns a fresh context plus an end
 // function that clears the cancellation state.
 func (a *App) begin() (context.Context, func()) {
-	a.mu.Lock()
-	if a.cancel != nil {
-		a.cancel()
-	}
-	a.gen++
-	gen := a.gen
-	ctx, cancel := context.WithCancel(a.ctx)
-	a.cancel = cancel
-	a.mu.Unlock()
-
-	return ctx, func() {
-		cancel()
-		a.mu.Lock()
-		if a.gen == gen {
-			a.cancel = nil
-		}
-		a.mu.Unlock()
-	}
+	return a.ops.begin(a.ctx)
 }
 
 // Trace runs a single traceroute. Results are emitted under target id 0.
@@ -398,7 +379,7 @@ func (a *App) Scan(req ScanRequest) error {
 
 	var discovered []subdomains.Result
 	var crawlResult webcrawl.Result
-	dnsDiscovery := opts.BruteForce || opts.PTR || opts.Services
+	dnsDiscovery := opts.BruteForce || opts.PTR || opts.Sweep24 || opts.Services
 
 	var wordlist []string
 	if path := strings.TrimSpace(opts.WordlistPath); path != "" && opts.BruteForce {
@@ -432,10 +413,13 @@ func (a *App) Scan(req ScanRequest) error {
 					Sweep24:    opts.Sweep24,
 					Services:   opts.Services,
 					Wordlist:   wordlist,
-					OnProgress: func(done, total, found int) {
+					OnProgress: func(phase string, done, total, found int) {
 						runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{
-							Phase: "subdomains", Done: done, Total: total, Found: found,
+							Phase: phase, Done: done, Total: total, Found: found,
 						})
+					},
+					OnLog: func(level, message string) {
+						runtime.EventsEmit(a.ctx, EventSubdomainLog, CrawlLogEvent{Level: level, Message: message})
 					},
 				}, a.subs)
 			}()
@@ -483,7 +467,7 @@ func (a *App) Scan(req ScanRequest) error {
 	if opts.AutoTrace && len(discovered) > 0 {
 		targets = appendSubdomainTargets(targets, discovered, limit)
 	}
-	targets = capTargets(targets, limit)
+	targets = netutil.Cap(targets, limit)
 	targets = filterUnroutable(targets)
 	if len(targets) == 0 {
 		message := fmt.Sprintf("no routable address records found for %s", req.Domain)
@@ -630,40 +614,13 @@ func mergeSubdomainResults(base, extra []subdomains.Result) []subdomains.Result 
 	}
 	for _, result := range extra {
 		if at, ok := index[result.Name]; ok {
-			base[at].IPs = mergeIPs(base[at].IPs, result.IPs)
+			base[at].IPs = netutil.MergeUnique(base[at].IPs, result.IPs)
 			continue
 		}
 		index[result.Name] = len(base)
 		base = append(base, result)
 	}
 	return base
-}
-
-// mergeIPs appends the values of extra that are not already in base.
-func mergeIPs(base, extra []string) []string {
-	if len(extra) == 0 {
-		return base
-	}
-	seen := make(map[string]bool, len(base))
-	for _, ip := range base {
-		seen[ip] = true
-	}
-	for _, ip := range extra {
-		if ip == "" || seen[ip] {
-			continue
-		}
-		seen[ip] = true
-		base = append(base, ip)
-	}
-	return base
-}
-
-// capTargets truncates targets to limit when limit > 0.
-func capTargets(targets []dnscheck.Target, limit int) []dnscheck.Target {
-	if limit > 0 && len(targets) > limit {
-		return targets[:limit]
-	}
-	return targets
 }
 
 // ScanPorts probes a host for open ports, emitting each open port as it is
@@ -775,21 +732,8 @@ func (a *App) NetClose(sessionID string) error {
 // neither cancels nor is cancelled by traces. Progress is streamed through
 // domain:progress; the finished report is the return value.
 func (a *App) AnalyzeDomain(domain string) (domaincheck.Report, error) {
-	ctx, cancel := context.WithCancel(a.ctx)
-
-	a.domainMu.Lock()
-	if a.domainCancel != nil {
-		a.domainCancel()
-	}
-	a.domainCancel = cancel
-	a.domainMu.Unlock()
-
-	defer func() {
-		cancel()
-		a.domainMu.Lock()
-		a.domainCancel = nil
-		a.domainMu.Unlock()
-	}()
+	ctx, end := a.domainOps.begin(a.ctx)
+	defer end()
 
 	report, err := a.domain.Analyze(ctx, domain, func(phase, message string) {
 		runtime.EventsEmit(a.ctx, EventDomainProgress, DomainProgressEvent{Phase: phase, Message: message})
@@ -802,11 +746,7 @@ func (a *App) AnalyzeDomain(domain string) (domaincheck.Report, error) {
 
 // CancelDomainAnalysis stops a running domain analysis, if any.
 func (a *App) CancelDomainAnalysis() {
-	a.domainMu.Lock()
-	defer a.domainMu.Unlock()
-	if a.domainCancel != nil {
-		a.domainCancel()
-	}
+	a.domainOps.stop()
 }
 
 // ExportDomainReport renders the report as text and writes it to a path chosen
@@ -816,9 +756,15 @@ func (a *App) ExportDomainReport(report domaincheck.Report) (string, error) {
 	if name == "" {
 		name = "domain"
 	}
+	return a.saveTextReport("Save domain analysis report", name+"-domain-report.txt", domaincheck.FormatReport(report))
+}
+
+// saveTextReport asks the user for a destination and writes content there. It
+// returns the chosen path, or "" when the dialog is cancelled.
+func (a *App) saveTextReport(title, defaultName, content string) (string, error) {
 	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		Title:           "Save domain analysis report",
-		DefaultFilename: name + "-domain-report.txt",
+		Title:           title,
+		DefaultFilename: defaultName,
 		Filters: []runtime.FileFilter{
 			{DisplayName: "Text files (*.txt)", Pattern: "*.txt"},
 			{DisplayName: "All files", Pattern: "*"},
@@ -830,7 +776,7 @@ func (a *App) ExportDomainReport(report domaincheck.Report) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-	if err := os.WriteFile(path, []byte(domaincheck.FormatReport(report)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -848,20 +794,8 @@ func (a *App) UnmaskTarget(domain string, customRules bool) (origin.Report, erro
 		return origin.Report{}, errors.New("no target domain provided")
 	}
 
-	ctx, cancel := context.WithCancel(a.ctx)
-	a.originMu.Lock()
-	if a.originCancel != nil {
-		a.originCancel()
-	}
-	a.originCancel = cancel
-	a.originMu.Unlock()
-
-	defer func() {
-		cancel()
-		a.originMu.Lock()
-		a.originCancel = nil
-		a.originMu.Unlock()
-	}()
+	ctx, end := a.originOps.begin(a.ctx)
+	defer end()
 
 	var subs []subdomains.Result
 	if a.subs != nil {
@@ -961,11 +895,7 @@ func unmaskRulesPath() string {
 
 // CancelUnmaskTarget stops a running origin discovery, if any.
 func (a *App) CancelUnmaskTarget() {
-	a.originMu.Lock()
-	defer a.originMu.Unlock()
-	if a.originCancel != nil {
-		a.originCancel()
-	}
+	a.originOps.stop()
 }
 
 // ExportOriginReport renders the report as text and writes it to a path chosen
@@ -975,33 +905,12 @@ func (a *App) ExportOriginReport(report origin.Report) (string, error) {
 	if name == "" {
 		name = "target"
 	}
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		Title:           "Save origin discovery report",
-		DefaultFilename: name + "-origin-report.txt",
-		Filters: []runtime.FileFilter{
-			{DisplayName: "Text files (*.txt)", Pattern: "*.txt"},
-			{DisplayName: "All files", Pattern: "*"},
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-	if path == "" {
-		return "", nil
-	}
-	if err := os.WriteFile(path, []byte(origin.FormatReport(report)), 0o644); err != nil {
-		return "", err
-	}
-	return path, nil
+	return a.saveTextReport("Save origin discovery report", name+"-origin-report.txt", origin.FormatReport(report))
 }
 
 // Cancel stops the running trace or scan, if any.
 func (a *App) Cancel() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.cancel != nil {
-		a.cancel()
-	}
+	a.ops.stop()
 }
 
 // SaveHistory stores the supplied snapshot of the current traces and returns
@@ -1129,17 +1038,28 @@ func (a *App) runTrace(ctx context.Context, target int, host string, maxHops int
 	}
 }
 
+// resolveGeo resolves an IP for event emission. A failed lookup still returns
+// ok=true with empty GeoData so the UI can stop showing the address as pending;
+// ok=false means the caller's context ended and nothing should be emitted.
+func (a *App) resolveGeo(ctx context.Context, ip string) (geolocator.GeoData, bool) {
+	data, err := a.geo.ResolveOne(ctx, ip)
+	if err != nil {
+		if ctx.Err() != nil {
+			return geolocator.GeoData{}, false
+		}
+		return geolocator.GeoData{}, true
+	}
+	return data, true
+}
+
 // emitGeo resolves a hop IP and emits an EventGeo. Lookups run in the
 // background so a slow geolocation service never delays the trace stream. A
 // failed lookup is still emitted (with Resolved false) so the UI can stop
 // showing the hop as pending.
 func (a *App) emitGeo(ctx context.Context, target, hop int, ip string) {
-	data, err := a.geo.ResolveOne(ctx, ip)
-	if err != nil {
-		if ctx.Err() != nil {
-			return
-		}
-		data = geolocator.GeoData{}
+	data, ok := a.resolveGeo(ctx, ip)
+	if !ok {
+		return
 	}
 	runtime.EventsEmit(a.ctx, EventGeo, GeoEvent{Target: target, Hop: hop, Geo: data})
 }
@@ -1147,12 +1067,9 @@ func (a *App) emitGeo(ctx context.Context, target, hop int, ip string) {
 // emitTargetGeo resolves the target address and emits an EventTargetGeo so the
 // destination can be placed on the map even when the trace never reaches it.
 func (a *App) emitTargetGeo(ctx context.Context, target int, ip string) {
-	data, err := a.geo.ResolveOne(ctx, ip)
-	if err != nil {
-		if ctx.Err() != nil {
-			return
-		}
-		data = geolocator.GeoData{}
+	data, ok := a.resolveGeo(ctx, ip)
+	if !ok {
+		return
 	}
 	runtime.EventsEmit(a.ctx, EventTargetGeo, TargetGeoEvent{Target: target, Geo: data})
 }

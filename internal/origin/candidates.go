@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"traceroute/internal/netutil"
 	"traceroute/internal/subdomains"
 )
 
@@ -37,7 +38,7 @@ func gatherCandidates(ctx context.Context, domain string, base Baseline, opts Op
 		}
 	}
 
-	for _, ip := range resolveIPs(ctx, opts.Resolver, domain) {
+	for _, ip := range netutil.ResolveIPs(ctx, opts.Resolver, domain) {
 		add(ip, domain, "dns")
 	}
 
@@ -50,7 +51,7 @@ func gatherCandidates(ctx context.Context, domain string, base Baseline, opts Op
 	if records, err := opts.Resolver.LookupMX(ctx, domain); err == nil {
 		for _, record := range records {
 			host := strings.TrimSuffix(record.Host, ".")
-			for _, ip := range resolveIPs(ctx, opts.Resolver, host) {
+			for _, ip := range netutil.ResolveIPs(ctx, opts.Resolver, host) {
 				add(ip, host, "mx")
 			}
 		}
@@ -63,7 +64,7 @@ func gatherCandidates(ctx context.Context, domain string, base Baseline, opts Op
 	}
 
 	for _, name := range base.Cert.SANs {
-		for _, ip := range resolveIPs(ctx, opts.Resolver, name) {
+		for _, ip := range netutil.ResolveIPs(ctx, opts.Resolver, name) {
 			add(ip, name, "san")
 		}
 	}
@@ -76,8 +77,8 @@ func gatherCandidates(ctx context.Context, domain string, base Baseline, opts Op
 	for ip, entry := range seen {
 		candidates = append(candidates, Candidate{
 			IP:        ip,
-			Hostnames: sortedKeys(entry.hostnames),
-			Sources:   sortedKeys(entry.sources),
+			Hostnames: netutil.SortedKeys(entry.hostnames),
+			Sources:   netutil.SortedKeys(entry.sources),
 		})
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].IP < candidates[j].IP })
@@ -88,19 +89,6 @@ func gatherCandidates(ctx context.Context, domain string, base Baseline, opts Op
 	return candidates
 }
 
-// resolveIPs resolves a hostname to its address strings, ignoring errors.
-func resolveIPs(ctx context.Context, resolver Resolver, host string) []string {
-	ips, err := resolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(ips))
-	for _, ip := range ips {
-		out = append(out, ip.String())
-	}
-	return out
-}
-
 // stripCIDR returns the address part of a CIDR literal, or the input when it
 // has no prefix.
 func stripCIDR(literal string) string {
@@ -108,14 +96,4 @@ func stripCIDR(literal string) string {
 		return literal[:i]
 	}
 	return literal
-}
-
-// sortedKeys returns the keys of a string set in sorted order.
-func sortedKeys(set map[string]struct{}) []string {
-	out := make([]string, 0, len(set))
-	for key := range set {
-		out = append(out, key)
-	}
-	sort.Strings(out)
-	return out
 }

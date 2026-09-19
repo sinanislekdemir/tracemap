@@ -6,12 +6,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
+
+	"traceroute/internal/netutil"
+	"traceroute/internal/ratelimit"
 )
 
 // Resolver is the subset of net.Resolver used for discovery, so it can be
@@ -53,10 +57,28 @@ type Options struct {
 	MaxResults      int
 	MaxPTRNetblocks int
 	Wordlist        []string
-	OnProgress      func(done, total, found int)
+	// OnProgress reports progress for one discovery phase ("subdomains" for
+	// brute force, "ptr" for reverse DNS, "sweep" for the /24 sweep).
+	OnProgress func(phase string, done, total, found int)
+	// OnLog reports verbose per-step detail (level is info/ok/warn/error).
+	OnLog func(level, message string)
 
 	// wildcardLabels lets tests pin the labels used for wildcard detection.
 	wildcardLabels []string
+}
+
+// reportProgress invokes OnProgress when the caller subscribed.
+func (o Options) reportProgress(phase string, done, total, found int) {
+	if o.OnProgress != nil {
+		o.OnProgress(phase, done, total, found)
+	}
+}
+
+// logf invokes OnLog with a formatted message when the caller subscribed.
+func (o Options) logf(level, format string, args ...any) {
+	if o.OnLog != nil {
+		o.OnLog(level, fmt.Sprintf(format, args...))
+	}
 }
 
 const (
@@ -71,7 +93,7 @@ const (
 // Discover finds subdomains of domain. When cache is non-nil, cached results
 // seed the set and the merged result is written back.
 func Discover(ctx context.Context, resolver Resolver, domain string, opts Options, cache Cache) []Result {
-	domain = normalize(domain)
+	domain = netutil.NormalizeHost(domain)
 	opts = withDefaults(opts)
 
 	collector := newCollector(opts.MaxResults)
@@ -85,7 +107,7 @@ func Discover(ctx context.Context, resolver Resolver, domain string, opts Option
 
 	// Seed IPs for reverse lookups: everything already known plus the apex.
 	seedIPs := collector.ips()
-	if ips := lookupIPs(ctx, resolver, domain); len(ips) > 0 {
+	if ips := netutil.ResolveIPs(ctx, resolver, domain); len(ips) > 0 {
 		seedIPs = append(seedIPs, ips...)
 	}
 
@@ -125,6 +147,11 @@ func withDefaults(opts Options) Options {
 	if len(opts.Wordlist) == 0 {
 		opts.Wordlist = Wordlist
 	}
+	// A /24 sweep is a reverse-lookup technique; enabling it implies PTR so the
+	// option is never silently ignored when PTR is left unchecked.
+	if opts.Sweep24 {
+		opts.PTR = true
+	}
 	return opts
 }
 
@@ -141,20 +168,20 @@ func newCollector(max int) *collector {
 }
 
 func (c *collector) add(name, source string, ips []string) {
-	name = normalize(name)
+	name = netutil.NormalizeHost(name)
 	if name == "" {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if existing, ok := c.byName[name]; ok {
-		existing.IPs = mergeUnique(existing.IPs, ips)
+		existing.IPs = netutil.MergeUnique(existing.IPs, ips)
 		return
 	}
 	if len(c.order) >= c.max {
 		return
 	}
-	result := &Result{Name: name, Source: source, IPs: mergeUnique(nil, ips)}
+	result := &Result{Name: name, Source: source, IPs: netutil.MergeUnique(nil, ips)}
 	c.byName[name] = result
 	c.order = append(c.order, name)
 }
@@ -167,6 +194,13 @@ func (c *collector) ips() []string {
 		ips = append(ips, c.byName[name].IPs...)
 	}
 	return ips
+}
+
+// count returns how many unique names have been collected so far.
+func (c *collector) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.order)
 }
 
 func (c *collector) results() []Result {
@@ -189,7 +223,7 @@ func detectWildcard(ctx context.Context, resolver Resolver, domain string, opts 
 	}
 	wildcard := make(map[string]bool)
 	for _, label := range labels {
-		for _, ip := range lookupIPs(ctx, resolver, label+"."+domain) {
+		for _, ip := range netutil.ResolveIPs(ctx, resolver, label+"."+domain) {
 			wildcard[ip] = true
 		}
 	}
@@ -200,7 +234,7 @@ func detectWildcard(ctx context.Context, resolver Resolver, domain string, opts 
 func bruteForce(ctx context.Context, resolver Resolver, domain string, opts Options, wildcard map[string]bool, c *collector) {
 	total := len(opts.Wordlist)
 	sem := make(chan struct{}, opts.Concurrency)
-	limiter := newRateLimiter(opts.RatePerSecond)
+	limiter := ratelimit.New(float64(opts.RatePerSecond))
 	var wg sync.WaitGroup
 	var done, found int64
 
@@ -214,18 +248,19 @@ func bruteForce(ctx context.Context, resolver Resolver, domain string, opts Opti
 		go func(word string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := limiter.wait(ctx); err != nil {
+			if err := limiter.Wait(ctx); err != nil {
 				return
 			}
 			name := word + "." + domain
-			ips := stripWildcard(lookupIPs(ctx, resolver, name), wildcard)
+			ips := stripWildcard(netutil.ResolveIPs(ctx, resolver, name), wildcard)
 			if len(ips) > 0 {
 				c.add(name, "brute", ips)
 				atomic.AddInt64(&found, 1)
+				opts.logf("ok", "brute %s · %s", name, strings.Join(ips, ", "))
 			}
 			n := atomic.AddInt64(&done, 1)
-			if opts.OnProgress != nil && (n%progressEvery == 0 || int(n) == total) {
-				opts.OnProgress(int(n), total, int(atomic.LoadInt64(&found)))
+			if n%progressEvery == 0 || int(n) == total {
+				opts.reportProgress("subdomains", int(n), total, int(atomic.LoadInt64(&found)))
 			}
 		}(word)
 	}
@@ -258,38 +293,53 @@ func discoverServices(ctx context.Context, resolver Resolver, domain string, c *
 
 // addResolved resolves host (if it is a subdomain of domain) and records it.
 func addResolved(ctx context.Context, resolver Resolver, domain, source, host string, c *collector) {
-	name := normalize(host)
-	if !isStrictSubdomain(name, domain) {
+	name := netutil.NormalizeHost(host)
+	if !netutil.IsStrictSubdomain(name, domain) {
 		return
 	}
-	if ips := lookupIPs(ctx, resolver, name); len(ips) > 0 {
+	if ips := netutil.ResolveIPs(ctx, resolver, name); len(ips) > 0 {
 		c.add(name, source, ips)
 	}
 }
 
 // reverseLookup resolves PTR records for known IPs and, when Sweep24 is set,
-// for the surrounding /24 of each IPv4.
+// for the surrounding /24 of each IPv4. Both phases report progress and log
+// every in-domain name they recover.
 func reverseLookup(ctx context.Context, resolver Resolver, domain string, c *collector, seedIPs []string, opts Options) {
-	ips := mergeUnique(c.ips(), seedIPs)
-	limiter := newRateLimiter(opts.RatePerSecond)
+	ips := netutil.MergeUnique(c.ips(), seedIPs)
+	limiter := ratelimit.New(float64(opts.RatePerSecond))
 
+	// Reverse DNS phase: the addresses already known, nothing else.
+	ptrTargets := make([]string, 0, len(ips))
 	for _, ip := range ips {
-		if !isPublicIP(ip) {
-			continue
+		if netutil.IsPublicIP(ip) {
+			ptrTargets = append(ptrTargets, ip)
 		}
-		if err := limiter.wait(ctx); err != nil {
+	}
+	opts.logf("info", "reverse DNS · %d address(es)", len(ptrTargets))
+	opts.reportProgress("ptr", 0, len(ptrTargets), c.count())
+	for i, ip := range ptrTargets {
+		if err := limiter.Wait(ctx); err != nil {
 			return
 		}
-		addPTR(ctx, resolver, domain, ip, c)
+		for _, name := range addPTR(ctx, resolver, domain, ip, c) {
+			opts.logf("ok", "ptr %s → %s", ip, name)
+		}
+		if done := i + 1; done%progressEvery == 0 || done == len(ptrTargets) {
+			opts.reportProgress("ptr", done, len(ptrTargets), c.count())
+		}
 	}
 
 	if !opts.Sweep24 {
 		return
 	}
+
+	// /24 sweep phase: every host address in the netblocks around the known
+	// IPv4 addresses, bounded by MaxPTRNetblocks.
 	seenNet := make(map[string]bool)
-	networks := 0
+	var networks []string
 	for _, ip := range ips {
-		if networks >= opts.MaxPTRNetblocks {
+		if len(networks) >= opts.MaxPTRNetblocks {
 			break
 		}
 		network := ipv4Network(ip)
@@ -297,28 +347,52 @@ func reverseLookup(ctx context.Context, resolver Resolver, domain string, c *col
 			continue
 		}
 		seenNet[network] = true
-		networks++
+		networks = append(networks, network)
+	}
+	if len(networks) == 0 {
+		opts.logf("warn", "sweep /24 · no IPv4 netblocks to sweep")
+		return
+	}
+
+	total := len(networks) * maxPTRHostsPerNetblock
+	opts.logf("info", "sweep /24 · %d netblock(s) · %d hosts", len(networks), total)
+	opts.reportProgress("sweep", 0, total, c.count())
+	done := 0
+	for _, network := range networks {
+		before := c.count()
+		opts.logf("info", "sweeping %s.0/24", network)
 		for host := 1; host <= maxPTRHostsPerNetblock; host++ {
-			if err := limiter.wait(ctx); err != nil {
+			if err := limiter.Wait(ctx); err != nil {
 				return
 			}
-			addPTR(ctx, resolver, domain, network+"."+itoa(host), c)
+			for _, name := range addPTR(ctx, resolver, domain, network+"."+strconv.Itoa(host), c) {
+				opts.logf("ok", "sweep %s.%d → %s", network, host, name)
+			}
+			done++
+			if done%progressEvery == 0 || done == total {
+				opts.reportProgress("sweep", done, total, c.count())
+			}
 		}
+		opts.logf("info", "swept %s.0/24 · %d new name(s)", network, c.count()-before)
 	}
 }
 
-// addPTR reverse-resolves one address and records in-domain names.
-func addPTR(ctx context.Context, resolver Resolver, domain, ip string, c *collector) {
+// addPTR reverse-resolves one address, records in-domain names and returns the
+// names it added.
+func addPTR(ctx context.Context, resolver Resolver, domain, ip string, c *collector) []string {
 	names, err := resolver.LookupAddr(ctx, ip)
 	if err != nil {
-		return
+		return nil
 	}
+	var added []string
 	for _, name := range names {
-		name = normalize(name)
-		if isStrictSubdomain(name, domain) {
+		name = netutil.NormalizeHost(name)
+		if netutil.IsStrictSubdomain(name, domain) {
 			c.add(name, "ptr", []string{ip})
+			added = append(added, name)
 		}
 	}
+	return added
 }
 
 // parseSPFHosts returns the hostnames referenced by an SPF record.
@@ -417,19 +491,6 @@ var srvServices = []srvService{
 	{"matrix", "tcp"}, {"wpad", "tcp"}, {"ntp", "udp"},
 }
 
-// lookupIPs resolves host to its IP strings.
-func lookupIPs(ctx context.Context, resolver Resolver, host string) []string {
-	ips, err := resolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(ips))
-	for _, ip := range ips {
-		out = append(out, ip.String())
-	}
-	return out
-}
-
 // stripWildcard removes IPs answered by a wildcard zone.
 func stripWildcard(ips []string, wildcard map[string]bool) []string {
 	if len(wildcard) == 0 || len(ips) == 0 {
@@ -442,50 +503,6 @@ func stripWildcard(ips []string, wildcard map[string]bool) []string {
 		}
 	}
 	return out
-}
-
-// normalize lowercases a hostname and strips a trailing root dot.
-func normalize(host string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-}
-
-// isStrictSubdomain reports whether name is a proper subdomain of domain.
-func isStrictSubdomain(name, domain string) bool {
-	if name == "" || name == domain {
-		return false
-	}
-	return strings.HasSuffix(name, "."+domain)
-}
-
-// mergeUnique appends the values of extra that are not already in base.
-func mergeUnique(base, extra []string) []string {
-	seen := make(map[string]bool, len(base)+len(extra))
-	out := make([]string, 0, len(base)+len(extra))
-	for _, value := range base {
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	for _, value := range extra {
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	return out
-}
-
-// isPublicIP reports whether ip is a routable address.
-func isPublicIP(ip string) bool {
-	parsed := net.ParseIP(ip)
-	if parsed == nil {
-		return false
-	}
-	return !(parsed.IsLoopback() || parsed.IsPrivate() || parsed.IsUnspecified() ||
-		parsed.IsLinkLocalUnicast() || parsed.IsLinkLocalMulticast() || parsed.IsMulticast())
 }
 
 // ipv4Network returns the /24 network prefix of an IPv4 address, or "".
@@ -513,59 +530,4 @@ func randomLabels(n int) []string {
 		labels = append(labels, "tracemap-"+hex.EncodeToString(buf))
 	}
 	return labels
-}
-
-// itoa is a tiny non-allocating integer formatter for small positive ints.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [4]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
-}
-
-// rateLimiter spaces calls out to at most one per interval.
-type rateLimiter struct {
-	mu       sync.Mutex
-	interval time.Duration
-	next     time.Time
-}
-
-func newRateLimiter(perSecond int) *rateLimiter {
-	if perSecond <= 0 {
-		return &rateLimiter{}
-	}
-	return &rateLimiter{interval: time.Second / time.Duration(perSecond)}
-}
-
-func (r *rateLimiter) wait(ctx context.Context) error {
-	if r.interval <= 0 {
-		return nil
-	}
-	r.mu.Lock()
-	now := time.Now()
-	if r.next.Before(now) {
-		r.next = now
-	}
-	delay := r.next.Sub(now)
-	r.next = r.next.Add(r.interval)
-	r.mu.Unlock()
-
-	if delay <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }

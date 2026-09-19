@@ -8,11 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"traceroute/internal/sqliteutil"
 )
 
 // Geo is the stored geolocation of a hop or target.
@@ -75,41 +73,25 @@ type Store struct {
 // Open opens (creating if needed) the history database at path. An empty path
 // disables history and returns (nil, nil).
 func Open(path string) (*Store, error) {
-	if path == "" {
-		return nil, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-
-	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sqliteutil.Open(path,
+		`CREATE TABLE IF NOT EXISTS history_entry (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			kind        TEXT NOT NULL,
+			label       TEXT NOT NULL,
+			created_at  INTEGER NOT NULL,
+			max_hops    INTEGER NOT NULL,
+			trace_count INTEGER NOT NULL,
+			hop_count   INTEGER NOT NULL,
+			data        TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_history_created ON history_entry(created_at DESC)`,
+	)
 	if err != nil {
 		return nil, err
 	}
-	// A single connection keeps concurrent writers from tripping SQLite's
-	// database lock; history writes are infrequent anyway.
-	db.SetMaxOpenConns(1)
-
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS history_entry (
-		id          INTEGER PRIMARY KEY AUTOINCREMENT,
-		kind        TEXT NOT NULL,
-		label       TEXT NOT NULL,
-		created_at  INTEGER NOT NULL,
-		max_hops    INTEGER NOT NULL,
-		trace_count INTEGER NOT NULL,
-		hop_count   INTEGER NOT NULL,
-		data        TEXT NOT NULL
-	)`); err != nil {
-		_ = db.Close()
-		return nil, err
+	if db == nil {
+		return nil, nil
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_created
-		ON history_entry(created_at DESC)`); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-
 	return &Store{db: db, path: path}, nil
 }
 

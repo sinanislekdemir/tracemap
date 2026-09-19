@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { PickWordlist } from '../../wailsjs/go/main/App';
+import Modal from './Modal';
+import { useEscape } from '../useEscape';
 import type { ScanOptions } from '../types';
 
 interface ScanModalProps {
@@ -64,18 +66,7 @@ const ScanModal = ({
 }: ScanModalProps) => {
   const [options, setOptions] = useState<ScanOptions>(STANDARD);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onCancel();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onCancel]);
+  useEscape(open, onCancel);
 
   if (!open) {
     return null;
@@ -96,25 +87,27 @@ const ScanModal = ({
   };
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div
-        className="modal modal--scan"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Scan options"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-head">
-          <div>
-            <div className="modal-title">SCAN OPTIONS</div>
-            <div className="modal-sub">DNS records, subdomain discovery and tracing</div>
-          </div>
-          <button type="button" className="modal-close" onClick={onCancel} aria-label="Close">
-            ×
+    <Modal
+      title="SCAN OPTIONS"
+      subtitle="DNS records, subdomain discovery and tracing"
+      ariaLabel="Scan options"
+      onClose={onCancel}
+      footer={
+        <>
+          <button type="button" className="btn" onClick={onCancel}>
+            Cancel
           </button>
-        </div>
-
-        <div className="modal-body">
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={domain.trim() === ''}
+            onClick={() => onConfirm(options)}
+          >
+            Start scan
+          </button>
+        </>
+      }
+    >
           <div className="scan-fields">
             <div className="field field--target">
               <label className="field-label" htmlFor="scan-domain">
@@ -320,23 +313,7 @@ const ScanModal = ({
                 />
             </div>
           </div>
-        </div>
-
-        <div className="modal-foot">
-          <button type="button" className="btn" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={domain.trim() === ''}
-            onClick={() => onConfirm(options)}
-          >
-            Start scan
-          </button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

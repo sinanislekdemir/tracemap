@@ -234,21 +234,3 @@ func isText(contentType string) bool {
 	}
 	return false
 }
-
-// normalizeHost lowercases a hostname and strips a trailing root dot.
-func normalizeHost(host string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-}
-
-// isStrictSubdomain reports whether name is a proper subdomain of domain.
-func isStrictSubdomain(name, domain string) bool {
-	if name == "" || domain == "" || name == domain {
-		return false
-	}
-	return strings.HasSuffix(name, "."+domain)
-}
-
-// isSameSite reports whether host is the domain or one of its subdomains.
-func isSameSite(host, domain string) bool {
-	return host == domain || isStrictSubdomain(host, domain)
-}

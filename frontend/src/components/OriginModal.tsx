@@ -9,6 +9,10 @@ import {
 import { origin } from '../../wailsjs/go/models';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
 import ConsoleBody from './ConsoleBody';
+import Modal from './Modal';
+import { useEscape } from '../useEscape';
+import { formatDateMs, joinList, shortHash } from '../format';
+import { EVENT_ORIGIN_LOG, EVENT_ORIGIN_PROGRESS } from '../events';
 import type {
   LogLevel,
   LogLine,
@@ -18,8 +22,6 @@ import type {
   UnmaskRulesInfo,
 } from '../types';
 
-const EVENT_ORIGIN_PROGRESS = 'origin:progress';
-const EVENT_ORIGIN_LOG = 'origin:log';
 const MAX_MODAL_LOG_LINES = 500;
 
 type Phase = 'options' | 'running' | 'done';
@@ -33,17 +35,6 @@ const VERDICT_LABELS: Record<string, string> = {
   proxy: 'PROXY',
   dead: 'DEAD',
 };
-
-const join = (values?: string[]): string => (values && values.length > 0 ? values.join(', ') : '—');
-
-const formatMs = (ms?: number): string => {
-  if (!ms) {
-    return '—';
-  }
-  return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-};
-
-const shortHash = (value?: string): string => (value ? value.slice(0, 16) : '—');
 
 const markerLabel = (result: origin.Origin): string => {
   const city = result.geo?.city;
@@ -134,25 +125,14 @@ const OriginModal = ({ open, domain, onDomainChange, onClose, onLog, onOrigins }
     return () => off();
   }, [open, pushLog]);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        handleClose();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  });
-
   const handleClose = () => {
     if (phase === 'running') {
       void CancelUnmaskTarget();
     }
     onClose();
   };
+
+  useEscape(open, handleClose);
 
   const start = () => {
     const trimmed = domain.trim();
@@ -232,25 +212,41 @@ const OriginModal = ({ open, domain, onDomainChange, onClose, onLog, onOrigins }
   }
 
   return (
-    <div className="modal-backdrop" onClick={handleClose}>
-      <div
-        className="modal modal--scan modal--origin"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Unmask target"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-head">
-          <div>
-            <div className="modal-title">UNMASK TARGET</div>
-            <div className="modal-sub selectable">origin discovery · DNS footprint + direct fingerprint</div>
-          </div>
-          <button type="button" className="modal-close" onClick={handleClose} aria-label="Close">
-            ×
-          </button>
-        </div>
-
-        <div className="modal-body">
+    <Modal
+      title="UNMASK TARGET"
+      subtitle="origin discovery · DNS footprint + direct fingerprint"
+      ariaLabel="Unmask target"
+      variant="modal--origin"
+      onClose={handleClose}
+      footer={
+        <>
+          {phase === 'running' ? (
+            <button type="button" className="btn" onClick={() => void CancelUnmaskTarget()}>
+              Stop
+            </button>
+          ) : (
+            <>
+              <button type="button" className="btn" onClick={handleClose}>
+                Close
+              </button>
+              {report && (
+                <button type="button" className="btn" onClick={handleExport}>
+                  Export
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={domain.trim() === ''}
+                onClick={start}
+              >
+                {report ? 'Re-run' : 'Unmask'}
+              </button>
+            </>
+          )}
+        </>
+      }
+    >
           <div className="scan-fields">
             <div className="field field--target">
               <label className="field-label" htmlFor="origin-target">
@@ -357,7 +353,7 @@ const OriginModal = ({ open, domain, onDomainChange, onClose, onLog, onOrigins }
                   <div className="domain-row">
                     <span>Proxied IPs</span>
                     <span className="selectable">
-                      {join(report.baseline.proxiedIps)}
+                      {joinList(report.baseline.proxiedIps)}
                       {report.baseline.proxied ? ' · intermediary detected' : ' · no intermediary detected'}
                     </span>
                   </div>
@@ -365,7 +361,7 @@ const OriginModal = ({ open, domain, onDomainChange, onClose, onLog, onOrigins }
                     <span>Certificate</span>
                     <span className="selectable">
                       {shortHash(report.baseline.cert?.sha256)} · issuer {report.baseline.cert?.issuer || '—'} ·
-                      expires {formatMs(report.baseline.cert?.notAfter)}
+                      expires {formatDateMs(report.baseline.cert?.notAfter)}
                     </span>
                   </div>
                   <div className="domain-row">
@@ -435,36 +431,7 @@ const OriginModal = ({ open, domain, onDomainChange, onClose, onLog, onOrigins }
           )}
 
           {exportPath && <div className="domain-export-path selectable">Saved to {exportPath}</div>}
-        </div>
-
-        <div className="modal-foot">
-          {phase === 'running' ? (
-            <button type="button" className="btn" onClick={() => void CancelUnmaskTarget()}>
-              Stop
-            </button>
-          ) : (
-            <>
-              <button type="button" className="btn" onClick={handleClose}>
-                Close
-              </button>
-              {report && (
-                <button type="button" className="btn" onClick={handleExport}>
-                  Export
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={domain.trim() === ''}
-                onClick={start}
-              >
-                {report ? 'Re-run' : 'Unmask'}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

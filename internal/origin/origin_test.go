@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"traceroute/internal/netutil"
 	"traceroute/internal/subdomains"
 )
 
@@ -317,12 +318,14 @@ func TestProxyHeadersCustomRules(t *testing.T) {
 
 func TestNormalizeDomain(t *testing.T) {
 	for input, want := range map[string]string{
-		"https://Example.com/path?q=1": "example.com",
-		"example.com.":                 "example.com",
-		"  example.com  ":              "example.com",
+		"https://Example.com/path?q=1":  "example.com",
+		"example.com.":                  "example.com",
+		"  example.com  ":               "example.com",
+		"example.com:8443":              "example.com",
+		"https://Example.com:8443/path": "example.com",
 	} {
-		if got := normalizeDomain(input); got != want {
-			t.Fatalf("normalizeDomain(%q) = %q, want %q", input, got, want)
+		if got := netutil.NormalizeDomain(input); got != want {
+			t.Fatalf("NormalizeDomain(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

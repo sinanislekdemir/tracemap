@@ -3,10 +3,8 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { NetClose, NetConnect, NetSend } from '../../wailsjs/go/main/App';
 import { main } from '../../wailsjs/go/models';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
+import { EVENT_NET_CLOSED, EVENT_NET_DATA } from '../events';
 import type { LogLevel, NetClosedEvent, NetDataEvent, NetStatus } from '../types';
-
-const EVENT_NET_DATA = 'net:data';
-const EVENT_NET_CLOSED = 'net:closed';
 
 const MAX_ENTRIES = 2000;
 const DEFAULT_TIMEOUT_MS = 10000;

@@ -41,7 +41,10 @@ highlighted as correlation points.*
   (with wildcard filtering) or a custom newline-delimited wordlist file,
   reverse-resolve (PTR) discovered IPs, sweep `/24` netblocks, and extract hosts
   from SPF/DMARC TXT and SRV records. Results are cached locally and can be
-  reviewed and traced selectively.
+  reviewed and traced selectively. Every phase reports live progress (brute
+  force, PTR and the `/24` sweep each show done/total and how many names were
+  found) and streams each step into the SUBDOMAINS terminal window, so a slow
+  sweep never looks stuck.
 - **Web crawl** — optionally crawl the domain's front page and one level of
   same-site links with a browser `User-Agent`, following redirects and falling
   back to the `www.` host when the apex fails (never for an IP literal). It also
@@ -52,7 +55,9 @@ highlighted as correlation points.*
   The pure-Go scanner (no nmap) does a TCP connect scan or best-effort UDP
   probe over common-port presets or a custom range, with randomised port order
   and jitter to reduce the scan signature. Open ports are optionally identified
-  by banner grab, HTTP request and TLS handshake (server, certificate and ALPN).
+  by banner grab, HTTP request and TLS handshake on TCP (server, certificate and
+  ALPN), and by reply shape or printable banner on UDP (DNS, mDNS and NTP are
+  labelled).
 - **Domain analysis** — the **Tools ▾ → Domain analysis** report grades a domain
   on security and reliability. Registration data comes from RDAP via the IANA
   bootstrap, falling back to classic WHOIS (asking IANA for the registry server).

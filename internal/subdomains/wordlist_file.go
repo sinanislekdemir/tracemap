@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"os"
 	"strings"
+
+	"traceroute/internal/netutil"
 )
 
 // maxWordlistEntries bounds how many custom wordlist labels are kept, so a
@@ -28,7 +30,7 @@ func LoadWordlist(path string) ([]string, error) {
 	seen := make(map[string]bool)
 	words := make([]string, 0, 1024)
 	for scanner.Scan() {
-		word := normalize(scanner.Text())
+		word := netutil.NormalizeHost(scanner.Text())
 		if word == "" || strings.HasPrefix(word, "#") {
 			continue
 		}

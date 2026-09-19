@@ -20,6 +20,10 @@ OpenStreetMap map.
   brute force (embedded 1000+-name wordlist, wildcard-filtered), reverse DNS
   (PTR, optional `/24` sweep), and SPF/DMARC/SRV extraction. Results are cached
   and can be reviewed and traced selectively.
+- **Web crawl**: an optional scan phase fetches the frontpage and one level of
+  same-site links with a browser `User-Agent`, parses `robots.txt` and
+  `sitemap.xml`, and folds every in-domain hostname it sees into the subdomain
+  list (`source:"crawl"`). Pure Go; no `curl`/`wget`.
 - **History**: explicitly save completed traces/scans to a local database, then
   load any selection back onto the map to compare paths; hops shared by two or
   more traces are highlighted.
@@ -53,6 +57,7 @@ Go backend (in-process)
    ├── geolocator   (IP → lat/lon, city, country, ASN; cached)
    ├── dnscheck     (A/AAAA/CNAME/MX/NS/SOA lookup → trace targets)
    ├── subdomains   (local discovery: brute force, PTR, SPF/DMARC, SRV)
+   ├── webcrawl     (browser-UA HTTP crawl: frontpage + 1 level, robots, sitemap)
    ├── portscan     (TCP connect / UDP scan; banner/HTTP/TLS probing)
    └── history      (saved traces/scans; SQLite snapshot store)
 ```

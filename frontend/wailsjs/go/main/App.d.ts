@@ -21,6 +21,8 @@ export function NetConnect(arg1:main.NetConnectRequest):Promise<main.NetSession>
 
 export function NetSend(arg1:string,arg2:string):Promise<void>;
 
+export function PickWordlist():Promise<string>;
+
 export function SaveHistory(arg1:main.HistorySaveRequest):Promise<number>;
 
 export function Scan(arg1:main.ScanRequest):Promise<void>;

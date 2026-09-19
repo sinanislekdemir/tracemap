@@ -89,6 +89,18 @@ const NetcatPanel = ({ request, onLog }: NetcatPanelProps) => {
     sessionRef.current = sessionId;
   }, [sessionId]);
 
+  // Closing the window unmounts the panel; make sure the backend session is
+  // torn down with it.
+  useEffect(
+    () => () => {
+      const id = sessionRef.current;
+      if (id) {
+        void NetClose(id);
+      }
+    },
+    [],
+  );
+
   useLayoutEffect(() => {
     if (!pinnedRef.current) {
       return;

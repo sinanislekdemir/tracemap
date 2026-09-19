@@ -22,6 +22,7 @@ import (
 	"traceroute/internal/portscan"
 	"traceroute/internal/subdomains"
 	"traceroute/internal/tracerouter"
+	"traceroute/internal/webcrawl"
 )
 
 // Event names emitted to the frontend.
@@ -37,6 +38,9 @@ const (
 	EventScanDone     = "scan:done"
 	EventSubdomains   = "scan:subdomains"
 	EventScanProgress = "scan:progress"
+	EventCrawlPage    = "scan:crawlPage"
+	EventCrawl        = "scan:crawl"
+	EventCrawlLog     = "scan:crawlLog"
 	EventPortOpen     = "portscan:open"
 	EventPortProgress = "portscan:progress"
 	EventPortDone     = "portscan:done"
@@ -68,12 +72,20 @@ type ScanOptions struct {
 	ExpandNS bool `json:"expandNs"`
 	// BruteForce probes the embedded wordlist of common subdomain labels.
 	BruteForce bool `json:"bruteForce"`
+	// WordlistPath optionally points brute force at a custom wordlist file
+	// (newline-delimited labels) instead of the embedded list.
+	WordlistPath string `json:"wordlistPath"`
 	// PTR reverse-resolves discovered IPs into in-domain names.
 	PTR bool `json:"ptr"`
 	// Sweep24 also reverse-resolves the /24 around each IPv4 found.
 	Sweep24 bool `json:"sweep24"`
 	// Services parses SPF/DMARC TXT records and common SRV records.
 	Services bool `json:"services"`
+	// Crawl fetches the domain's frontpage, one level of same-site links,
+	// robots.txt and sitemap.xml, discovering pages and subdomains.
+	Crawl bool `json:"crawl"`
+	// CrawlMaxPages caps how many pages the crawl fetches (0 uses the default).
+	CrawlMaxPages int `json:"crawlMaxPages"`
 	// AutoTrace adds discovered subdomains to the traced targets.
 	AutoTrace bool `json:"autoTrace"`
 	// MaxTargets caps how many addresses are traced (0 uses the default).
@@ -94,6 +106,12 @@ type ScanProgressEvent struct {
 	Done  int    `json:"done"`
 	Total int    `json:"total"`
 	Found int    `json:"found"`
+}
+
+// CrawlLogEvent is a verbose crawl step, so the UI can show what was tried.
+type CrawlLogEvent struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
 }
 
 // PortScanRequest starts a port scan of a host. Either Preset or PortRange
@@ -289,6 +307,18 @@ func (a *App) CheckTools() ToolStatus {
 	return ToolStatus{Available: true, Tool: filepath.Base(path)}
 }
 
+// PickWordlist opens a native file chooser and returns the selected wordlist
+// path, or "" when the user cancels.
+func (a *App) PickWordlist() (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select subdomain wordlist",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Wordlists (*.txt, *.lst)", Pattern: "*.txt;*.lst"},
+			{DisplayName: "All files", Pattern: "*"},
+		},
+	})
+}
+
 // begin cancels any running operation and returns a fresh context plus an end
 // function that clears the cancellation state.
 func (a *App) begin() (context.Context, func()) {
@@ -335,18 +365,81 @@ func (a *App) Scan(req ScanRequest) error {
 	runtime.EventsEmit(a.ctx, EventScanRecords, records)
 
 	var discovered []subdomains.Result
-	if opts.BruteForce || opts.PTR || opts.Services {
-		discovered = subdomains.Discover(ctx, net.DefaultResolver, req.Domain, subdomains.Options{
-			BruteForce: opts.BruteForce,
-			PTR:        opts.PTR,
-			Sweep24:    opts.Sweep24,
-			Services:   opts.Services,
-			OnProgress: func(done, total, found int) {
-				runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{
-					Phase: "subdomains", Done: done, Total: total, Found: found,
+	var crawlResult webcrawl.Result
+	dnsDiscovery := opts.BruteForce || opts.PTR || opts.Services
+
+	var wordlist []string
+	if path := strings.TrimSpace(opts.WordlistPath); path != "" && opts.BruteForce {
+		words, err := subdomains.LoadWordlist(path)
+		if err != nil {
+			message := fmt.Sprintf("could not read subdomain wordlist: %v", err)
+			runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+			return errors.New(message)
+		}
+		wordlist = words
+	}
+
+	if dnsDiscovery || opts.Crawl {
+		// Announce each enabled step before it starts, so the UI opens its
+		// terminal window even when a step fetches nothing or fails.
+		if dnsDiscovery {
+			runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{Phase: "subdomains"})
+		}
+		if opts.Crawl {
+			runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{Phase: "crawl"})
+		}
+
+		var wg sync.WaitGroup
+		if dnsDiscovery {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				discovered = subdomains.Discover(ctx, net.DefaultResolver, req.Domain, subdomains.Options{
+					BruteForce: opts.BruteForce,
+					PTR:        opts.PTR,
+					Sweep24:    opts.Sweep24,
+					Services:   opts.Services,
+					Wordlist:   wordlist,
+					OnProgress: func(done, total, found int) {
+						runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{
+							Phase: "subdomains", Done: done, Total: total, Found: found,
+						})
+					},
+				}, a.subs)
+			}()
+		}
+		if opts.Crawl {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				crawlResult = webcrawl.Crawl(ctx, req.Domain, webcrawl.Options{
+					MaxPages: opts.CrawlMaxPages,
+					OnPage: func(page webcrawl.Page) {
+						runtime.EventsEmit(a.ctx, EventCrawlPage, page)
+					},
+					OnProgress: func(done, total, found int) {
+						runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{
+							Phase: "crawl", Done: done, Total: total, Found: found,
+						})
+					},
+					OnLog: func(level, message string) {
+						runtime.EventsEmit(a.ctx, EventCrawlLog, CrawlLogEvent{Level: level, Message: message})
+					},
 				})
-			},
-		}, a.subs)
+			}()
+		}
+		wg.Wait()
+
+		if opts.Crawl {
+			crawlSubs := crawlSubdomainResults(crawlResult.Subdomains)
+			persistCrawlSubdomains(ctx, a.subs, req.Domain, crawlSubs, discovered)
+			discovered = mergeSubdomainResults(discovered, crawlSubs)
+			crawlResult.Pages = stripPageBodies(crawlResult.Pages)
+			runtime.EventsEmit(a.ctx, EventCrawl, crawlResult)
+		}
+		if discovered == nil {
+			discovered = []subdomains.Result{}
+		}
 		runtime.EventsEmit(a.ctx, EventSubdomains, discovered)
 	}
 
@@ -445,6 +538,92 @@ func appendSubdomainTargets(targets []dnscheck.Target, discovered []subdomains.R
 		}
 	}
 	return targets
+}
+
+// stripPageBodies returns copies of pages with their raw bodies removed, so the
+// final scan:crawl event stays small: the full HTML already streamed per page
+// through scan:crawlPage.
+func stripPageBodies(pages []webcrawl.Page) []webcrawl.Page {
+	out := make([]webcrawl.Page, len(pages))
+	for i, page := range pages {
+		page.HTML = ""
+		out[i] = page
+	}
+	return out
+}
+
+// crawlSubdomainResults converts crawl-discovered hostnames into subdomain
+// results tagged with the "crawl" source.
+func crawlSubdomainResults(found []webcrawl.Subdomain) []subdomains.Result {
+	results := make([]subdomains.Result, 0, len(found))
+	for _, sub := range found {
+		if sub.Name == "" {
+			continue
+		}
+		results = append(results, subdomains.Result{Name: sub.Name, Source: "crawl", IPs: sub.IPs})
+	}
+	return results
+}
+
+// persistCrawlSubdomains caches crawl results, skipping names already known to
+// DNS discovery so the "crawl" source never overwrites a more specific one.
+func persistCrawlSubdomains(ctx context.Context, store *subdomains.Store, domain string, crawl, dns []subdomains.Result) {
+	if store == nil || len(crawl) == 0 {
+		return
+	}
+	known := make(map[string]bool, len(dns))
+	for _, result := range dns {
+		known[result.Name] = true
+	}
+	fresh := make([]subdomains.Result, 0, len(crawl))
+	for _, result := range crawl {
+		if !known[result.Name] {
+			fresh = append(fresh, result)
+		}
+	}
+	if len(fresh) > 0 {
+		_ = store.Save(ctx, domain, fresh)
+	}
+}
+
+// mergeSubdomainResults merges extra into base by name, unioning IPs while
+// keeping the source already recorded for a name.
+func mergeSubdomainResults(base, extra []subdomains.Result) []subdomains.Result {
+	if len(extra) == 0 {
+		return base
+	}
+	index := make(map[string]int, len(base))
+	for i, result := range base {
+		index[result.Name] = i
+	}
+	for _, result := range extra {
+		if at, ok := index[result.Name]; ok {
+			base[at].IPs = mergeIPs(base[at].IPs, result.IPs)
+			continue
+		}
+		index[result.Name] = len(base)
+		base = append(base, result)
+	}
+	return base
+}
+
+// mergeIPs appends the values of extra that are not already in base.
+func mergeIPs(base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]bool, len(base))
+	for _, ip := range base {
+		seen[ip] = true
+	}
+	for _, ip := range extra {
+		if ip == "" || seen[ip] {
+			continue
+		}
+		seen[ip] = true
+		base = append(base, ip)
+	}
+	return base
 }
 
 // capTargets truncates targets to limit when limit > 0.

@@ -44,13 +44,14 @@ workflow that packs the `.deb`/`.rpm`/`.tar.gz`.
 
 ```
 main.go                     Wails entry; embeds frontend/dist; window options
-app.go                      App struct, bound methods (Trace/Scan/ScanPorts/Net*/Cancel/History), events
+app.go                      App struct, bound methods (Trace/Scan/ScanPorts/Net*/Cancel/History/PickWordlist), events
 internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP -> geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS lookup -> trace targets
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
+internal/webcrawl/          browser-UA HTTP crawl (frontpage + 1 level, robots, sitemap)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
-internal/netcat/            interactive TCP sessions ("nc") for the bottom dock
+internal/netcat/            interactive TCP sessions ("nc") for floating windows
 internal/history/           saved traces/scans (SQLite snapshot store)
 internal/appdata/           shared SQLite database path (tracemap.db)
 frontend/src/               React app
@@ -96,9 +97,27 @@ PLAN.md                     design/architecture document
   resolves discovered IPs (optionally sweeping `/24`s), and extracts hosts from
   SPF/DMARC TXT and SRV records. Bounded concurrency + rate limiter; results are
   cached in the `subdomain` table via `Store` (implements `Cache`). The Scan
-  dialog (`ScanOptions`) chooses which techniques run; `App.Scan` emits
+  dialog (`ScanOptions`) chooses which techniques run; `ScanOptions.WordlistPath`
+  points brute force at a user-supplied newline-delimited file via
+  `subdomains.LoadWordlist` (leftmost label kept, bounded to 100k entries), and
+  `App.PickWordlist` opens a native file chooser for it. `App.Scan` emits
   `scan:subdomains`/`scan:progress`, and `App.TraceTargets` traces a reviewed
   selection.
+- **Web crawl** (`internal/webcrawl`): pure-Go (`net/http` + `x/net/html`, no
+  external binary). `Crawl` fetches the frontpage and one level of same-site
+  links with a browser `User-Agent`, follows up to 10 HTTP redirects (including
+  a redirect that lands on another host, which then defines the same-site root),
+  falls back to the `www.` host when the apex candidates fail (never for an IP
+  literal), parses `robots.txt` (sitemap directives and Allow/Disallow paths —
+  Disallow is ignored, this is a recon tool) and `sitemap.xml` (urlset +
+  sitemapindex, gzip-aware, bounded depth), and extracts every in-domain
+  hostname. Bodies are
+  capped (`MaxBodyBytes`) and flagged truncated. When `ScanOptions.Crawl` is set,
+  `App.Scan` runs it alongside DNS discovery, streams `scan:crawlPage` per page,
+  `scan:crawlLog` for each fetch attempt/outcome (so the UI shows what it tried)
+  and `scan:crawl` with the final `Result`, and merges crawl-discovered hostnames
+  into the subdomain list as `source:"crawl"` (persisted via `subdomains.Store`,
+  so AutoTrace and the review UI treat them like DNS hits).
 - **Port scanning** (`internal/portscan`): pure-Go, no nmap. `App.ScanPorts`
   expands a preset (`top20`/`top100`/`top1000`) or a `ParsePorts` range into a
   port list, then `Scanner.Scan` probes with bounded concurrency, randomised
@@ -111,14 +130,15 @@ PLAN.md                     design/architecture document
   `portscan:error`; results are not persisted. `ScanPorts` uses the shared
   `App.begin()` cancel model, so it cancels (and is cancelled by) other
   operations.
-- **Interactive TCP sessions** (`internal/netcat`): line-oriented netcat in the
-  bottom dock. `App.NetConnect` opens a `netcat.Session` (optional TLS) and a
-  reader goroutine streams raw bytes as `net:data` events (Go `[]byte` →
-  base64); `NetSend`/`NetClose` drive it, and `net:closed` reports the reason.
-  Sessions live in their own `Manager` registry, independent of the
+- **Interactive TCP sessions** (`internal/netcat`): line-oriented netcat in a
+  floating terminal window. `App.NetConnect` opens a `netcat.Session` (optional
+  TLS) and a reader goroutine streams raw bytes as `net:data` events (Go
+  `[]byte` → base64); `NetSend`/`NetClose` drive it, and `net:closed` reports
+  the reason. Sessions live in their own `Manager` registry, independent of the
   `App.begin()` cancel model, and are all closed on shutdown. The frontend
-  (`NetcatPanel`) decodes base64, escapes control characters and caps scrollback.
-  TCP only; no UDP, ANSI terminal emulation, listen mode or file transfer.
+  (`NetcatPanel`) decodes base64, escapes control characters and caps scrollback;
+  closing its window unmounts the panel and closes the session. TCP only; no UDP,
+  ANSI terminal emulation, listen mode or file transfer.
 - **History** (`internal/history`): explicit snapshots of completed traces/scans
   in the shared `tracemap.db` (JSON blob per entry + denormalized counts).
   Bound methods: `SaveHistory`, `ListHistory`, `LoadHistory`,
@@ -131,6 +151,13 @@ PLAN.md                     design/architecture document
 
 - **No page scrolling.** The app is a fixed `100vh` grid (app bar → toolbar →
   sidebar/splitter/map → status bar). Only panes scroll internally.
+- **Floating terminal windows** replace the old bottom dock. `useFloatingWindows`
+  owns position/size/z-order; `FloatingWindow` is the draggable/resizable shell
+  and `TerminalWindow` renders a channel's log lines (`ConsoleBody`). Each scan
+  step opens its own window as it starts (`dns`, `subdomains`, `crawl`, `trace`),
+  and netcat sessions each get a window. Log lines are stored per channel in
+  `App.tsx` (`logChannels`), capped per channel. Scan windows are closed at the
+  start of a new operation; console/ports/netcat windows persist.
 - **react-leaflet gotcha:** `className` must be a **top-level prop** on
   `CircleMarker`/`Polyline`. Putting it in `pathOptions` routes it through
   `setStyle()`, which silently drops it. Colours go in `pathOptions`; animations
@@ -159,6 +186,8 @@ PLAN.md                     design/architecture document
 - `geolocator` tests use fake lookups/stores; real-DB tests skip when absent.
 - `history` tests use a temp-file SQLite store; no network.
 - `subdomains` tests use a fake resolver and a temp SQLite cache; no network.
+- `webcrawl` tests serve fixtures from an `httptest.Server` and dial it with a
+  custom transport (plus a fake resolver); no external network.
 - `portscan` tests scan localhost listeners and `httptest` HTTP/TLS servers; no
   external network. `Scanner.DialContext`/`ResolveIP` can be faked.
 - Keep tests deterministic and offline.

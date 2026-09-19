@@ -14,22 +14,27 @@ import {
 } from '../wailsjs/go/main/App';
 import { EventsOff, EventsOn } from '../wailsjs/runtime/runtime';
 import { main } from '../wailsjs/go/models';
-import BottomDock from './components/BottomDock';
-import type { BottomTab } from './components/BottomDock';
 import ContextMenu from './components/ContextMenu';
+import FloatingWindow from './components/FloatingWindow';
 import HistoryModal from './components/HistoryModal';
 import HopList from './components/HopList';
 import MissingToolModal from './components/MissingToolModal';
+import NetcatPanel from './components/NetcatPanel';
 import PortScanModal from './components/PortScanModal';
 import ScanModal from './components/ScanModal';
 import StatusBar from './components/StatusBar';
 import SubdomainList from './components/SubdomainList';
+import TerminalWindow from './components/TerminalWindow';
 import Toolbar from './components/Toolbar';
 import TraceList from './components/TraceList';
 import TracerouteMap from './components/TracerouteMap';
+import { useFloatingWindows } from './useFloatingWindows';
 import { TRACE_COLORS } from './colors';
 import { buildDisplayHops, isLocated } from './traces';
 import type {
+  CrawlPage,
+  CrawlLogEvent,
+  CrawlResult,
   DNSRecord,
   DoneEvent,
   ErrorEvent,
@@ -45,6 +50,7 @@ import type {
   SubdomainResult,
   TargetEvent,
   TargetGeoEvent,
+  TerminalKind,
   TraceState,
 } from './types';
 
@@ -59,6 +65,9 @@ const EVENT_SCAN_TARGETS = 'scan:targets';
 const EVENT_SCAN_DONE = 'scan:done';
 const EVENT_SUBDOMAINS = 'scan:subdomains';
 const EVENT_SCAN_PROGRESS = 'scan:progress';
+const EVENT_CRAWL_PAGE = 'scan:crawlPage';
+const EVENT_CRAWL = 'scan:crawl';
+const EVENT_CRAWL_LOG = 'scan:crawlLog';
 
 const MIN_SIDEBAR = 240;
 const MAX_SIDEBAR = 560;
@@ -66,9 +75,7 @@ const MAX_SIDEBAR = 560;
 const MIN_RIGHT = 240;
 const MAX_RIGHT = 560;
 
-const MIN_CONSOLE = 96;
-const MAX_CONSOLE = 560;
-const MAX_LOG_LINES = 500;
+const MAX_LOG_LINES = 2000;
 
 const App = () => {
   const [target, setTarget] = useState('example.com');
@@ -102,24 +109,63 @@ const App = () => {
   const [tracingSubs, setTracingSubs] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; host: string; label: string } | null>(null);
   const [portScan, setPortScan] = useState<{ host: string; label: string } | null>(null);
-  const [logLines, setLogLines] = useState<LogLine[]>([]);
-  const [bottomOpen, setBottomOpen] = useState(true);
-  const [bottomHeight, setBottomHeight] = useState(200);
-  const [bottomTab, setBottomTab] = useState<BottomTab>('console');
-  const [netRequest, setNetRequest] = useState<{ host: string; nonce: number } | null>(null);
+  const [logChannels, setLogChannels] = useState<Record<string, LogLine[]>>({});
   const busyRef = useRef(false);
   const toastTimer = useRef<number | null>(null);
   const logIdRef = useRef(0);
-  const scanPhaseRef = useRef<string | null>(null);
+  const seenPhases = useRef<Set<string>>(new Set());
+  const dismissedWindows = useRef<Set<TerminalKind>>(new Set());
+  const { windows, open: openWindow, close: closeWindow, focus: focusWindow, move: moveWindow, resize: resizeWindow, closeKinds: closeWindowKinds } =
+    useFloatingWindows();
 
-  const appendLog = useCallback((level: LogLevel, text: string) => {
+  const appendLog = useCallback((level: LogLevel, text: string, channel = 'console') => {
     logIdRef.current += 1;
-    const line: LogLine = { id: logIdRef.current, time: Date.now(), level, text };
-    setLogLines((previous) => {
-      const next = [...previous, line];
-      return next.length > MAX_LOG_LINES ? next.slice(next.length - MAX_LOG_LINES) : next;
+    const line: LogLine = { id: logIdRef.current, time: Date.now(), level, text, channel };
+    setLogChannels((previous) => {
+      const list = previous[channel] ?? [];
+      const next = [...list, line];
+      return {
+        ...previous,
+        [channel]: next.length > MAX_LOG_LINES ? next.slice(next.length - MAX_LOG_LINES) : next,
+      };
     });
   }, []);
+
+  const clearChannel = useCallback((channel: TerminalKind) => {
+    setLogChannels((previous) => ({ ...previous, [channel]: [] }));
+  }, []);
+
+  const appendNetcatLog = useCallback(
+    (level: LogLevel, text: string) => appendLog(level, text, 'netcat'),
+    [appendLog],
+  );
+  const appendPortLog = useCallback(
+    (level: LogLevel, text: string) => appendLog(level, text, 'ports'),
+    [appendLog],
+  );
+
+  // openStep auto-opens a scan-step window unless the user closed it during
+  // this operation; explicit actions (toolbar, context menu) always open.
+  const openStep = useCallback(
+    (kind: TerminalKind, options?: { title?: string; host?: string }) => {
+      if (dismissedWindows.current.has(kind)) {
+        return;
+      }
+      openWindow(kind, options);
+    },
+    [openWindow],
+  );
+
+  const handleCloseWindow = useCallback(
+    (id: string) => {
+      const win = windows.find((candidate) => candidate.id === id);
+      if (win) {
+        dismissedWindows.current.add(win.kind);
+      }
+      closeWindow(id);
+    },
+    [closeWindow, windows],
+  );
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -191,6 +237,7 @@ const App = () => {
         `t${event.target} · hop ${String(event.hop).padStart(2, '0')} · ${event.ip || '* * *'} · ${
           event.rttMs != null ? `${event.rttMs.toFixed(1)} ms` : '—'
         }`,
+        'trace',
       );
     });
     EventsOn(EVENT_GEO, (event: GeoEvent) => {
@@ -205,20 +252,20 @@ const App = () => {
         ),
       );
       const place = [event.geo.city, event.geo.country].filter(Boolean).join(', ') || 'unknown';
-      appendLog('info', `t${event.target} · hop ${String(event.hop).padStart(2, '0')} · geo ${place}${event.geo.asn ? ` · ${event.geo.asn}` : ''}`);
+      appendLog('info', `t${event.target} · hop ${String(event.hop).padStart(2, '0')} · geo ${place}${event.geo.asn ? ` · ${event.geo.asn}` : ''}`, 'trace');
     });
     EventsOn(EVENT_TARGET, (event: TargetEvent) => {
       setTraces((previous) =>
         previous.map((trace) => (trace.id === event.target ? { ...trace, targetIp: event.ip } : trace)),
       );
-      appendLog('ok', `t${event.target} · target resolved ${event.ip}`);
+      appendLog('ok', `t${event.target} · target resolved ${event.ip}`, 'trace');
     });
     EventsOn(EVENT_TARGET_GEO, (event: TargetGeoEvent) => {
       setTraces((previous) =>
         previous.map((trace) => (trace.id === event.target ? { ...trace, targetGeo: event.geo } : trace)),
       );
       const place = [event.geo.city, event.geo.country].filter(Boolean).join(', ') || 'unknown';
-      appendLog('info', `t${event.target} · target geo ${place}`);
+      appendLog('info', `t${event.target} · target geo ${place}`, 'trace');
     });
     EventsOn(EVENT_DONE, (event: DoneEvent) => {
       setTraces((previous) =>
@@ -228,7 +275,10 @@ const App = () => {
         busyRef.current = false;
         setIsLoading(false);
       }
-      appendLog('ok', `t${event.target} · done · ${event.hops} hops`);
+      appendLog('ok', `t${event.target} · done · ${event.hops} hops`, 'trace');
+      if (event.target === 0) {
+        appendLog('ok', `trace complete · ${event.hops} hops`, 'console');
+      }
     });
     EventsOn(EVENT_ERROR, (event: ErrorEvent) => {
       setTraces((previous) =>
@@ -239,18 +289,31 @@ const App = () => {
         setError(event.message);
         setIsLoading(false);
       }
-      appendLog('error', `t${event.target} · error: ${event.message}`);
+      appendLog('error', `t${event.target} · error: ${event.message}`, 'trace');
+      if (event.target === 0) {
+        appendLog('error', event.message, 'console');
+      }
       if (event.code === 'missing-tool') {
         setToolError({ message: event.message, hint: event.hint ?? '' });
       }
     });
     EventsOn(EVENT_SCAN_RECORDS, (event: DNSRecord[]) => {
-      setRecords(event);
-      appendLog('info', `dns · ${event.length} records resolved`);
+      const list = Array.isArray(event) ? event : [];
+      setRecords(list);
+      openStep('dns');
+      appendLog('info', `${list.length} records resolved`, 'dns');
+      list.forEach((record) =>
+        appendLog(
+          'info',
+          `${record.type.padEnd(5)} ${record.value}${record.priority ? ` · priority ${record.priority}` : ''}`,
+          'dns',
+        ),
+      );
     });
     EventsOn(EVENT_SCAN_TARGETS, (event: ScanTarget[]) => {
+      const list = Array.isArray(event) ? event : [];
       setTraces(
-        event.map((scanTarget, index) => ({
+        list.map((scanTarget, index) => ({
           id: scanTarget.id,
           label: scanTarget.label,
           kind: scanTarget.kind,
@@ -260,27 +323,59 @@ const App = () => {
         })),
       );
       setSelectedTraces(new Set());
-      setFocusedTrace(event[0]?.id ?? null);
-      appendLog('ok', `scan · ${event.length} targets queued`);
+      setFocusedTrace(list[0]?.id ?? null);
+      openStep('trace');
+      appendLog('ok', `${list.length} targets queued`, 'trace');
+      list.forEach((scanTarget) =>
+        appendLog('info', `t${scanTarget.id} · ${scanTarget.kind} ${scanTarget.label} → ${scanTarget.ip}`, 'trace'),
+      );
     });
     EventsOn(EVENT_SCAN_DONE, () => {
       busyRef.current = false;
       setIsLoading(false);
       setScanProgress(null);
       setTracingSubs(false);
-      appendLog('ok', 'scan · complete');
+      appendLog('ok', 'scan complete', 'trace');
+      appendLog('ok', 'scan complete', 'console');
     });
     EventsOn(EVENT_SUBDOMAINS, (event: SubdomainResult[]) => {
-      setSubdomains(event);
+      const list = Array.isArray(event) ? event : [];
+      setSubdomains(list);
       setSelectedSubs(new Set());
-      appendLog('ok', `subdomains · ${event.length} found`);
+      openStep('subdomains');
+      appendLog('ok', `${list.length} found`, 'subdomains');
+      list.forEach((sub) =>
+        appendLog(
+          'ok',
+          `${sub.name}${sub.ips.length ? ` · ${sub.ips.join(', ')}` : ''} [${sub.source}]`,
+          'subdomains',
+        ),
+      );
     });
     EventsOn(EVENT_SCAN_PROGRESS, (event: ScanProgressEvent) => {
       setScanProgress(event);
-      if (event.phase !== scanPhaseRef.current) {
-        scanPhaseRef.current = event.phase;
-        appendLog('info', `scan · ${event.phase}`);
+      const channel: TerminalKind = event.phase === 'crawl' ? 'crawl' : 'subdomains';
+      // Open the step's window on every event (it is a singleton); the backend
+      // also emits a zero-progress event when the step starts.
+      openStep(channel);
+      if (!seenPhases.current.has(event.phase)) {
+        seenPhases.current.add(event.phase);
+        appendLog('info', `phase · ${event.phase}`, channel);
       }
+      if (event.total > 0 || event.done > 0) {
+        appendLog('info', `progress · ${event.done}/${event.total} · ${event.found} found`, channel);
+      }
+    });
+    EventsOn(EVENT_CRAWL_PAGE, (_event: CrawlPage) => {
+      openStep('crawl');
+    });
+    EventsOn(EVENT_CRAWL_LOG, (event: CrawlLogEvent) => {
+      const level: LogLevel = event.level === 'ok' || event.level === 'warn' || event.level === 'error' ? event.level : 'info';
+      appendLog(level, event.message, 'crawl');
+    });
+    EventsOn(EVENT_CRAWL, (event: CrawlResult) => {
+      const pages = Array.isArray(event.pages) ? event.pages : [];
+      appendLog('ok', `${pages.length} pages · ${event.urls?.length ?? 0} urls · ${event.subdomains?.length ?? 0} subdomains`, 'crawl');
     });
 
     return () => {
@@ -295,8 +390,11 @@ const App = () => {
       EventsOff(EVENT_SCAN_DONE);
       EventsOff(EVENT_SUBDOMAINS);
       EventsOff(EVENT_SCAN_PROGRESS);
+      EventsOff(EVENT_CRAWL_PAGE);
+      EventsOff(EVENT_CRAWL);
+      EventsOff(EVENT_CRAWL_LOG);
     };
-  }, [appendLog]);
+  }, [appendLog, openStep]);
 
   useEffect(() => {
     if (!isLoading || startedAt == null) {
@@ -326,9 +424,12 @@ const App = () => {
       setScanProgress(null);
       setTracingSubs(false);
       setRightbarOpen(true);
-      scanPhaseRef.current = null;
+      seenPhases.current.clear();
+      dismissedWindows.current.clear();
+      closeWindowKinds(['dns', 'subdomains', 'crawl', 'trace']);
+      setLogChannels((previous) => ({ ...previous, dns: [], subdomains: [], crawl: [], trace: [] }));
     },
-    [],
+    [closeWindowKinds],
   );
 
   const handleTrace = useCallback(() => {
@@ -345,11 +446,13 @@ const App = () => {
     setSelectedTraces(new Set());
     setFocusedTrace(0);
     setLastTarget(trimmed);
-    appendLog('info', `▶ trace ${trimmed} · max ${maxHops} hops`);
+    openWindow('trace', { title: `TRACE · ${trimmed}` });
+    appendLog('info', `▶ trace ${trimmed} · max ${maxHops} hops`, 'trace');
+    appendLog('info', `▶ trace ${trimmed} · max ${maxHops} hops`, 'console');
     Trace({ target: trimmed, maxHops }).catch(() => {
       // Failures are surfaced through the trace:error event.
     });
-  }, [appendLog, maxHops, startOperation, target]);
+  }, [appendLog, maxHops, openWindow, startOperation, target]);
 
   const handleScan = useCallback(() => {
     if (busyRef.current) {
@@ -372,7 +475,8 @@ const App = () => {
     }
     setError(null);
     setPortScan({ host: trimmed, label: trimmed });
-  }, [target]);
+    openWindow('ports', { title: `PORTS · ${trimmed}` });
+  }, [openWindow, target]);
 
   const handleScanConfirm = useCallback(
     (options: ScanOptions) => {
@@ -383,12 +487,13 @@ const App = () => {
       setScanOpen(false);
       startOperation('scan');
       setLastTarget(trimmed);
-      appendLog('info', `▶ scan ${trimmed} · max ${maxHops} hops`);
+      openWindow('dns', { title: `DNS · ${trimmed}` });
+      appendLog('info', `▶ scan ${trimmed} · max ${maxHops} hops`, 'console');
       Scan(main.ScanRequest.createFrom({ domain: trimmed, maxHops, options })).catch(() => {
         // Failures are surfaced through the trace:error event.
       });
     },
-    [appendLog, maxHops, startOperation, target],
+    [appendLog, maxHops, openWindow, startOperation, target],
   );
 
   const handleToggleSub = useCallback((name: string) => {
@@ -421,14 +526,15 @@ const App = () => {
     setStartedAt(Date.now());
     setElapsedMs(0);
     setTracingSubs(true);
-    appendLog('info', `▶ trace ${hosts.length} selected ${hosts.length === 1 ? 'host' : 'hosts'}`);
+    openWindow('trace', { title: `TRACE · ${lastTarget || 'selected hosts'}` });
+    appendLog('info', `▶ trace ${hosts.length} selected ${hosts.length === 1 ? 'host' : 'hosts'}`, 'trace');
     TraceTargets(main.TraceTargetsRequest.createFrom({ domain: lastTarget, maxHops, hosts })).catch(() => {
       setTracingSubs(false);
     });
-  }, [appendLog, lastTarget, maxHops, selectedSubs]);
+  }, [appendLog, lastTarget, maxHops, openWindow, selectedSubs]);
 
   const handleCancel = useCallback(() => {
-    appendLog('warn', '■ cancel requested');
+    appendLog('warn', '■ cancel requested', 'console');
     Cancel();
   }, [appendLog]);
 
@@ -558,7 +664,7 @@ const App = () => {
           setSelectedHop(null);
           setViewMode('history');
           setHistoryOpen(false);
-          appendLog('info', `history · loaded ${loaded.length} ${loaded.length === 1 ? 'path' : 'paths'}`);
+          appendLog('info', `history · loaded ${loaded.length} ${loaded.length === 1 ? 'path' : 'paths'}`, 'console');
         })
         .catch((err: unknown) => {
           showToast(err instanceof Error ? err.message : 'Could not load history');
@@ -694,38 +800,21 @@ const App = () => {
     [rightbarOpen, rightWidth],
   );
 
-  const onBottomResizeDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const startY = event.clientY;
-      const startHeight = bottomHeight;
-      const maxHeight = Math.min(MAX_CONSOLE, Math.round(window.innerHeight * 0.6));
-      const onMove = (moveEvent: PointerEvent) => {
-        const next = Math.min(maxHeight, Math.max(MIN_CONSOLE, startHeight + (startY - moveEvent.clientY)));
-        setBottomHeight(next);
-      };
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-      };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
+  const openNetcat = useCallback(
+    (host: string) => {
+      openWindow('netcat', { title: host ? `NETCAT · ${host}` : 'NETCAT', host });
     },
-    [bottomHeight],
+    [openWindow],
   );
 
-  const handleToggleBottom = useCallback(() => setBottomOpen((value) => !value), []);
-  const handleClearConsole = useCallback(() => setLogLines([]), []);
-
-  const openNetcat = useCallback((host: string) => {
-    setBottomTab('netcat');
-    setBottomOpen(true);
-    setNetRequest({ host, nonce: Date.now() });
-  }, []);
+  const openConsole = useCallback(() => {
+    openWindow('console');
+  }, [openWindow]);
 
   const activeTrace = traces.find((trace) => trace.id === focusedTrace) ?? traces[0];
   const displayHops = useMemo(() => (activeTrace ? buildDisplayHops(activeTrace) : []), [activeTrace]);
   const hasDiscovery = records.length > 0 || subdomains.length > 0;
+  const topZ = windows.reduce((max, win) => Math.max(max, win.z), 0);
 
   const totals = useMemo(() => {
     let hops = 0;
@@ -746,11 +835,14 @@ const App = () => {
         ? 'done'
         : 'ready';
 
+  const phaseLabel = scanProgress?.phase === 'crawl' ? 'crawling' : 'discovering subdomains';
   const message = error
     ? error
     : isLoading
       ? scanProgress
-        ? `discovering subdomains ${scanProgress.done}/${scanProgress.total} · ${scanProgress.found} found`
+        ? scanProgress.total > 0
+          ? `${phaseLabel} ${scanProgress.done}/${scanProgress.total} · ${scanProgress.found} found`
+          : `${phaseLabel}…`
         : `${mode === 'scan' ? 'scanning' : 'probing'} ${lastTarget}…`
       : viewMode === 'history'
         ? `${traces.length} saved ${traces.length === 1 ? 'path' : 'paths'}`
@@ -798,6 +890,7 @@ const App = () => {
         onScan={handleScan}
         onPortScan={handlePortScan}
         onNet={() => openNetcat(target.trim())}
+        onConsole={openConsole}
         onCancel={handleCancel}
         onHistory={handleOpenHistory}
         onAddToHistory={handleAddToHistory}
@@ -942,19 +1035,42 @@ const App = () => {
         )}
       </div>
 
-      <BottomDock
-        open={bottomOpen}
-        height={bottomHeight}
-        tab={bottomTab}
-        onTabChange={setBottomTab}
-        onToggle={handleToggleBottom}
-        onResizeStart={onBottomResizeDown}
-        logLines={logLines}
-        logState={state}
-        onClearLog={handleClearConsole}
-        netRequest={netRequest}
-        onLog={appendLog}
-      />
+      <div className="window-layer">
+        {windows.map((win) => {
+          if (win.kind === 'netcat') {
+            return (
+              <FloatingWindow
+                key={win.id}
+                win={win}
+                active={win.z === topZ}
+                onFocus={focusWindow}
+                onClose={handleCloseWindow}
+                onMove={moveWindow}
+                onResize={resizeWindow}
+                headerExtra={<span className="fw-hint">{win.host ?? 'session'}</span>}
+              >
+                <NetcatPanel
+                  request={win.host ? { host: win.host, nonce: win.nonce ?? 0 } : null}
+                  onLog={appendNetcatLog}
+                />
+              </FloatingWindow>
+            );
+          }
+          return (
+            <TerminalWindow
+              key={win.id}
+              win={win}
+              active={win.z === topZ}
+              lines={logChannels[win.kind] ?? []}
+              onFocus={focusWindow}
+              onClose={handleCloseWindow}
+              onMove={moveWindow}
+              onResize={resizeWindow}
+              onClear={clearChannel}
+            />
+          );
+        })}
+      </div>
 
       <StatusBar
         state={state}
@@ -999,7 +1115,7 @@ const App = () => {
         host={portScan?.host ?? ''}
         label={portScan?.label}
         onClose={() => setPortScan(null)}
-        onLog={appendLog}
+        onLog={appendPortLog}
       />
 
       {contextMenu && (
@@ -1011,7 +1127,10 @@ const App = () => {
             {
               label: 'Find open ports',
               hint: contextMenu.host,
-              onSelect: () => setPortScan({ host: contextMenu.host, label: contextMenu.label }),
+              onSelect: () => {
+                setPortScan({ host: contextMenu.host, label: contextMenu.label });
+                openWindow('ports', { title: `PORTS · ${contextMenu.host}` });
+              },
             },
             {
               label: 'Connect (nc)',

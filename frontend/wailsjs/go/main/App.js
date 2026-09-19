@@ -38,6 +38,10 @@ export function NetSend(arg1, arg2) {
   return window['go']['main']['App']['NetSend'](arg1, arg2);
 }
 
+export function PickWordlist() {
+  return window['go']['main']['App']['PickWordlist']();
+}
+
 export function SaveHistory(arg1) {
   return window['go']['main']['App']['SaveHistory'](arg1);
 }

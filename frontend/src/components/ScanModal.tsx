@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { PickWordlist } from '../../wailsjs/go/main/App';
 import type { ScanOptions } from '../types';
 
 interface ScanModalProps {
@@ -14,9 +15,12 @@ interface ScanModalProps {
 const BASIC: ScanOptions = {
   expandNs: true,
   bruteForce: false,
+  wordlistPath: '',
   ptr: false,
   sweep24: false,
   services: false,
+  crawl: false,
+  crawlMaxPages: 25,
   autoTrace: true,
   maxTargets: 12,
 };
@@ -24,9 +28,12 @@ const BASIC: ScanOptions = {
 const STANDARD: ScanOptions = {
   expandNs: true,
   bruteForce: true,
+  wordlistPath: '',
   ptr: true,
   sweep24: false,
   services: true,
+  crawl: true,
+  crawlMaxPages: 25,
   autoTrace: false,
   maxTargets: 24,
 };
@@ -34,9 +41,12 @@ const STANDARD: ScanOptions = {
 const DEEP: ScanOptions = {
   expandNs: true,
   bruteForce: true,
+  wordlistPath: '',
   ptr: true,
   sweep24: true,
   services: true,
+  crawl: true,
+  crawlMaxPages: 50,
   autoTrace: false,
   maxTargets: 48,
 };
@@ -71,6 +81,17 @@ const ScanModal = ({
 
   const set = (patch: Partial<ScanOptions>) => setOptions((previous) => ({ ...previous, ...patch }));
   const toggle = (key: keyof ScanOptions) => set({ [key]: !options[key] } as Partial<ScanOptions>);
+
+  const handleBrowse = async () => {
+    try {
+      const path = await PickWordlist();
+      if (path) {
+        set({ wordlistPath: path });
+      }
+    } catch {
+      // A missing dialog just means the user types the path instead.
+    }
+  };
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
@@ -167,6 +188,31 @@ const ScanModal = ({
                 <span className="scan-option-hint">Probe the embedded list of common subdomain labels</span>
               </span>
             </label>
+            {options.bruteForce && (
+              <div className="scan-wordlist">
+                <label className="field-label" htmlFor="scan-wordlist">
+                  WORDLIST (OPTIONAL)
+                </label>
+                <div className="scan-wordlist-row">
+                  <input
+                    id="scan-wordlist"
+                    className="input selectable"
+                    type="text"
+                    value={options.wordlistPath}
+                    spellCheck={false}
+                    autoComplete="off"
+                    placeholder="embedded 1000-name list"
+                    onChange={(event) => set({ wordlistPath: event.target.value })}
+                  />
+                  <button type="button" className="btn btn--ghost" onClick={handleBrowse}>
+                    Browse
+                  </button>
+                </div>
+                <span className="scan-option-hint">
+                  Point brute force at a newline-delimited file of labels instead of the embedded list
+                </span>
+              </div>
+            )}
             <label className="scan-option">
               <input type="checkbox" checked={options.ptr} onChange={() => toggle('ptr')} />
               <span className="scan-option-main">
@@ -192,6 +238,36 @@ const ScanModal = ({
                 <span className="scan-option-hint">Extract hostnames from TXT and SRV records</span>
               </span>
             </label>
+          </div>
+
+          <div className="scan-group">
+            <div className="scan-group-title">WEB CRAWL</div>
+            <label className="scan-option">
+              <input type="checkbox" checked={options.crawl} onChange={() => toggle('crawl')} />
+              <span className="scan-option-main">
+                <span className="scan-option-label">Frontpage + 1 level</span>
+                <span className="scan-option-hint">
+                  Fetch the homepage and its links with a browser agent, plus robots.txt and sitemap.xml, to
+                  discover pages and subdomains
+                </span>
+              </span>
+            </label>
+            {options.crawl && (
+              <div className="scan-cap">
+                <label className="field-label" htmlFor="scan-crawl-pages">
+                  MAX PAGES
+                </label>
+                <input
+                  id="scan-crawl-pages"
+                  className="input input--num selectable"
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={options.crawlMaxPages}
+                  onChange={(event) => set({ crawlMaxPages: Number(event.target.value) || 25 })}
+                />
+              </div>
+            )}
           </div>
 
           <div className="scan-group">

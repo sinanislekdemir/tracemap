@@ -276,9 +276,12 @@ export namespace main {
 	export class ScanOptions {
 	    expandNs: boolean;
 	    bruteForce: boolean;
+	    wordlistPath: string;
 	    ptr: boolean;
 	    sweep24: boolean;
 	    services: boolean;
+	    crawl: boolean;
+	    crawlMaxPages: number;
 	    autoTrace: boolean;
 	    maxTargets: number;
 	
@@ -290,9 +293,12 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.expandNs = source["expandNs"];
 	        this.bruteForce = source["bruteForce"];
+	        this.wordlistPath = source["wordlistPath"];
 	        this.ptr = source["ptr"];
 	        this.sweep24 = source["sweep24"];
 	        this.services = source["services"];
+	        this.crawl = source["crawl"];
+	        this.crawlMaxPages = source["crawlMaxPages"];
 	        this.autoTrace = source["autoTrace"];
 	        this.maxTargets = source["maxTargets"];
 	    }

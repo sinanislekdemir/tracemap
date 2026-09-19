@@ -75,11 +75,55 @@ export interface ScanTarget {
 export interface ScanOptions {
   expandNs: boolean;
   bruteForce: boolean;
+  wordlistPath: string;
   ptr: boolean;
   sweep24: boolean;
   services: boolean;
+  crawl: boolean;
+  crawlMaxPages: number;
   autoTrace: boolean;
   maxTargets: number;
+}
+
+export interface CrawlPage {
+  url: string;
+  depth: number;
+  status: number;
+  contentType?: string;
+  title?: string;
+  size: number;
+  truncated?: boolean;
+  html?: string;
+  links?: string[];
+  hosts?: string[];
+}
+
+export interface CrawlRobots {
+  url: string;
+  status: number;
+  body?: string;
+  sitemaps?: string[];
+  paths?: string[];
+}
+
+export interface CrawlSitemap {
+  url: string;
+  status: number;
+  urls?: string[];
+  nested?: string[];
+}
+
+export interface CrawlResult {
+  pages: CrawlPage[];
+  robots?: CrawlRobots;
+  sitemaps?: CrawlSitemap[];
+  subdomains?: { name: string; ips: string[] }[];
+  urls?: string[];
+}
+
+export interface CrawlLogEvent {
+  level: LogLevel;
+  message: string;
 }
 
 export interface SubdomainResult {
@@ -147,6 +191,32 @@ export interface LogLine {
   time: number;
   level: LogLevel;
   text: string;
+  /** Terminal channel this line belongs to (e.g. "dns", "crawl", "netcat"). */
+  channel: string;
+}
+
+/** Every scan step owns a terminal channel and its own floating window. */
+export type TerminalKind =
+  | 'console'
+  | 'dns'
+  | 'subdomains'
+  | 'crawl'
+  | 'trace'
+  | 'ports'
+  | 'netcat';
+
+export interface FloatingWindowState {
+  id: string;
+  kind: TerminalKind;
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  z: number;
+  /** Netcat windows carry the host to connect to. */
+  host?: string;
+  nonce?: number;
 }
 
 export interface TraceState {

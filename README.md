@@ -35,9 +35,16 @@ highlighted as correlation points.*
   nameserver host's own addresses recursively up to a bounded depth, so
   nameserver infrastructure is traced too.
 - **Subdomain discovery** — the Scan dialog can brute-force 1000+ common labels
-  (with wildcard filtering), reverse-resolve (PTR) discovered IPs, sweep `/24`
-  netblocks, and extract hosts from SPF/DMARC TXT and SRV records. Results are
-  cached locally and can be reviewed and traced selectively.
+  (with wildcard filtering) or a custom newline-delimited wordlist file,
+  reverse-resolve (PTR) discovered IPs, sweep `/24` netblocks, and extract hosts
+  from SPF/DMARC TXT and SRV records. Results are cached locally and can be
+  reviewed and traced selectively.
+- **Web crawl** — optionally crawl the domain's front page and one level of
+  same-site links with a browser `User-Agent`, following redirects and falling
+  back to the `www.` host when the apex fails (never for an IP literal). It also
+  reads `robots.txt` and `sitemap.xml` (including sitemap indexes and gzipped
+  sitemaps) and folds every in-domain hostname it finds into the subdomain list.
+  Pure Go — no `curl`, `wget` or other external tools.
 - **Port scanning** — right-click a target or hop and choose **Find open ports**.
   The pure-Go scanner (no nmap) does a TCP connect scan or best-effort UDP
   probe over common-port presets or a custom range, with randomised port order
@@ -45,9 +52,9 @@ highlighted as correlation points.*
   by banner grab, HTTP request and TLS handshake (server, certificate and ALPN).
 - **Interactive TCP sessions** — open a netcat-style session to a host and port
   from the **Net** toolbar button or the right-click **Connect (nc)** action. A
-  line-oriented terminal in the bottom dock sends what you type (LF/CRLF/none)
-  and streams the peer's raw output back; optional TLS for encrypted services.
-  TCP only.
+  line-oriented terminal in its own floating window sends what you type
+  (LF/CRLF/none) and streams the peer's raw output back; optional TLS for
+  encrypted services. TCP only.
 - **Geolocation** — every responsive hop is resolved to coordinates, city,
   country and ASN/ISP, with a persistent cache so repeat hops are instant.
 - **History** — explicitly save completed traces and scans to a local SQLite
@@ -57,10 +64,12 @@ highlighted as correlation points.*
 - **Collapsible panels** — click a splitter to fold the hop list or the DNS /
   subdomain panel away and give the space to the map; the collapsed panel leaves
   a slim rail with a chevron to bring it back. Drag a splitter to resize it.
-- **Live console & netcat dock** — a collapsible, resizable bottom dock with
-  tabs. The console logs every hop, geolocation and scan event with a timestamp
-  and severity; the netcat tab hosts interactive TCP sessions. Both can be
-  cleared independently.
+- **Floating terminal windows** — every scan step (DNS, subdomains, crawl,
+  trace, ports) opens its own draggable, resizable terminal window and streams
+  verbose logs as it runs, so you can see exactly what each stage tried. Netcat
+  sessions get their own windows too, and a general **Console** window shows
+  overall activity. Move, resize or close them freely; scan windows reset at the
+  start of each operation.
 - **Missing-dependency guidance** — if no `traceroute`/`tracepath`/`mtr` (Unix)
   or `tracert` (Windows) is installed, the app shows a modal with the install
   command for your platform instead of a bare error.
@@ -97,13 +106,14 @@ through Wails bindings and runtime events.
 ```
 Wails window (React + Leaflet map UI)
    │  Bind: Trace, Scan, ScanPorts, NetConnect, NetSend, NetClose, CheckTools, …
-   │  Events: trace:hop, trace:geo, trace:done, scan:targets, portscan:open, net:data, …
+   │  Events: trace:hop, trace:geo, trace:done, scan:targets, scan:crawlPage, scan:crawlLog, portscan:open, net:data, …
    ▼
 Go backend (in-process)
    ├── tracerouter  spawn system traceroute/tracert, parse output
    ├── geolocator   IP → lat/lon, city, country, ASN (remote + SQLite + mmdb)
    ├── dnscheck     A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
    ├── subdomains   local subdomain discovery (brute force, PTR, SPF/SRV)
+   ├── webcrawl     browser-UA HTTP crawl (front page + 1 level, robots, sitemap)
    ├── portscan     TCP connect / UDP port scan + banner/HTTP/TLS probing
    ├── netcat       interactive TCP sessions (optional TLS)
    └── history      saved traces/scans (SQLite snapshot store)
@@ -146,19 +156,21 @@ make clean        # remove build/bin, frontend/dist
 1. Type a hostname or IP into **TARGET / DOMAIN** and press **Trace**
    (or `Enter`).
 2. Press **Scan** to open the scan options (DNS records, subdomain discovery,
-   and whether to auto-trace or review). Each target gets its own colour in the
-   legend and hop list. Discovered subdomains appear in the **SUBDOMAINS** pane,
-   where you can select which ones to trace.
+   web crawl, and whether to auto-trace or review). Each target gets its own
+   colour in the legend and hop list. As each step starts, it opens its own
+   terminal window with verbose logs; discovered subdomains appear in the
+   **SUBDOMAINS** pane, where you can select which ones to trace. Brute force can
+   use the embedded wordlist or a custom file chosen with **Browse**.
 3. Press **Ports** in the toolbar to scan the target, or right-click a target in
    the **TARGETS** pane, a hop in the hop list, or a marker on the map and
    choose **Find open ports**. Pick **Common ports** (Top 20/100/1000) or a
    **Port range**, choose TCP or UDP, and optionally identify protocols. Open
    ports stream into the dialog as they are found.
 4. Press **Net** in the toolbar (or right-click a target/hop and choose
-   **Connect (nc)**) to open the netcat tab in the bottom dock. Enter a port,
-   optionally enable **TLS**, connect, and type lines to send; output streams
-   into the terminal. Choose the line ending (LF/CRLF/none) and press
-   **Disconnect** when done.
+   **Connect (nc)**) to open a netcat session in its own floating window. Enter
+   a port, optionally enable **TLS**, connect, and type lines to send; output
+   streams into the terminal. Choose the line ending (LF/CRLF/none) and press
+   **Disconnect** when done. Each session gets its own window.
 5. Click a splitter between the map and a side panel to collapse or expand that
    panel — handy when you want more room for the map. Drag the splitter to
    resize instead.
@@ -214,6 +226,7 @@ internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP → geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
+internal/webcrawl/          browser-UA HTTP crawl (front page + 1 level, robots, sitemap)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
 internal/netcat/            interactive TCP sessions (optional TLS)
 internal/history/           saved traces/scans (SQLite snapshot store)
@@ -228,6 +241,8 @@ frontend/wailsjs/           generated bindings — do not edit by hand
 - `tracerouter` tests use a fake shell binary — no real traceroute.
 - `dnscheck` tests use a fake resolver — no network.
 - `subdomains` tests use a fake resolver and a temp SQLite cache — no network.
+- `webcrawl` tests serve fixtures from an `httptest.Server` and dial it with a
+  custom transport (plus a fake resolver) — no external network.
 - `geolocator` tests use fake lookups/stores; real-database tests skip when
   absent.
 - `history` tests use a temporary SQLite file — no network.

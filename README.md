@@ -12,13 +12,12 @@ Built with [Wails v2](https://wails.io) — a Go backend bound directly to a
 React + TypeScript frontend, packaged as a single native binary.
 
 ## Screenshots
-<img width="2434" height="1269" alt="Screenshot_20260917_222822" src="https://github.com/user-attachments/assets/bd860648-96ce-46a3-b630-8eeda8f10db8" />
-<img width="2277" height="1202" alt="Screenshot_20260917_223358" src="https://github.com/user-attachments/assets/eab44f14-914f-45c6-9265-fb17a4226dff" />
-<img width="2277" height="1204" alt="Screenshot_20260917_223552" src="https://github.com/user-attachments/assets/84b87538-35e2-47cf-a735-7dd39345fc95" />
-<img width="2277" height="1204" alt="Screenshot_20260917_223624" src="https://github.com/user-attachments/assets/29cfa1bb-5908-4519-ae97-766943d46291" />
-<img width="2277" height="1204" alt="Screenshot_20260917_223635" src="https://github.com/user-attachments/assets/0f9a8d00-eda1-4271-8f3e-1c9f10884541" />
-<img width="1297" height="753" alt="Screenshot_20260917_223701" src="https://github.com/user-attachments/assets/c80aaae9-8da9-4edd-beb8-c5567b984133" />
-<img width="2274" height="1203" alt="Screenshot_20260917_223947" src="https://github.com/user-attachments/assets/4d83ddea-5b33-4204-8d42-e62cc86b3836" />
+<img width="1909" height="1123" alt="Screenshot_20260919_145409" src="https://github.com/user-attachments/assets/9f5a8f62-d4c5-4704-b5da-9194c0dffcbe" />
+<img width="1909" height="1123" alt="Screenshot_20260919_145512" src="https://github.com/user-attachments/assets/d428bb7b-c87e-40d7-9fe1-ce6fceebc12c" />
+<img width="1909" height="1123" alt="Screenshot_20260919_145600" src="https://github.com/user-attachments/assets/04be7fc3-39b0-473d-990b-0097e0d74d00" />
+<img width="1909" height="1123" alt="Screenshot_20260919_145611" src="https://github.com/user-attachments/assets/26d12e49-e593-4f17-98bd-a24455e381c6" />
+<img width="1909" height="1123" alt="Screenshot_20260919_145704" src="https://github.com/user-attachments/assets/b1a4492f-a918-4cf1-b368-1691a9d780ff" />
+<img width="1909" height="1123" alt="Screenshot_20260919_145734" src="https://github.com/user-attachments/assets/662d7883-5846-40e2-8c98-2ae71ec6aa11" />
 
 
 

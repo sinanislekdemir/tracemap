@@ -1,4 +1,6 @@
+import { useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
+import ContextMenu from './ContextMenu';
 
 interface ToolbarProps {
   target: string;
@@ -8,6 +10,7 @@ interface ToolbarProps {
   isLoading: boolean;
   onTrace: () => void;
   onScan: () => void;
+  onDomainAnalysis: () => void;
   onPortScan: () => void;
   onNet: () => void;
   onConsole: () => void;
@@ -25,6 +28,7 @@ const Toolbar = ({
   isLoading,
   onTrace,
   onScan,
+  onDomainAnalysis,
   onPortScan,
   onNet,
   onConsole,
@@ -33,10 +37,27 @@ const Toolbar = ({
   onAddToHistory,
   canAddToHistory,
 }: ToolbarProps) => {
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [toolsPos, setToolsPos] = useState({ x: 0, y: 0 });
+  const toolsRef = useRef<HTMLButtonElement>(null);
+
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter' && !isLoading) {
       onTrace();
     }
+  };
+
+  const openTools = () => {
+    const rect = toolsRef.current?.getBoundingClientRect();
+    if (rect) {
+      setToolsPos({ x: rect.left, y: rect.bottom + 6 });
+    }
+    setToolsOpen(true);
+  };
+
+  const runTool = (action: () => void) => () => {
+    setToolsOpen(false);
+    action();
   };
 
   return (
@@ -85,28 +106,14 @@ const Toolbar = ({
       </button>
 
       <button
-        className="btn"
-        onClick={onPortScan}
-        disabled={isLoading}
-        title="Scan the target for open ports (TCP/UDP). You can also right-click a hop or marker."
+        ref={toolsRef}
+        className={`btn btn--tools${toolsOpen ? ' is-open' : ''}`}
+        onClick={() => (toolsOpen ? setToolsOpen(false) : openTools())}
+        title="Additional tools: domain analysis, port scan, netcat and console"
+        aria-haspopup="menu"
+        aria-expanded={toolsOpen}
       >
-        Ports
-      </button>
-
-      <button
-        className="btn"
-        onClick={onNet}
-        title="Open an interactive TCP session to the target (netcat). You can also right-click a hop or marker."
-      >
-        Net
-      </button>
-
-      <button
-        className="btn"
-        onClick={onConsole}
-        title="Open the general console window (all activity)"
-      >
-        Console
+        Tools <span className="btn-caret">▾</span>
       </button>
 
       <button className="btn" onClick={onCancel} disabled={!isLoading}>
@@ -125,6 +132,37 @@ const Toolbar = ({
       <button className="btn" onClick={onHistory} title="Browse saved traces and compare them on the map">
         History
       </button>
+
+      {toolsOpen && (
+        <ContextMenu
+          x={toolsPos.x}
+          y={toolsPos.y}
+          title="TOOLS"
+          items={[
+            {
+              label: 'Domain analysis',
+              hint: 'WHOIS · DNS · TLS',
+              onSelect: runTool(onDomainAnalysis),
+            },
+            {
+              label: 'Port scan',
+              hint: 'open ports',
+              onSelect: runTool(onPortScan),
+            },
+            {
+              label: 'Netcat',
+              hint: 'interactive TCP',
+              onSelect: runTool(onNet),
+            },
+            {
+              label: 'Console',
+              hint: 'activity log',
+              onSelect: runTool(onConsole),
+            },
+          ]}
+          onClose={() => setToolsOpen(false)}
+        />
+      )}
     </div>
   );
 };

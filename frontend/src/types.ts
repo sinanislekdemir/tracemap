@@ -267,3 +267,10 @@ export interface HistoryEntry {
   maxHops: number;
   traces: HistoryTrace[];
 }
+
+export type CheckStatus = 'pass' | 'warn' | 'fail' | 'info';
+
+export interface DomainProgressEvent {
+  phase: string;
+  message: string;
+}

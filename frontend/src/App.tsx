@@ -15,6 +15,7 @@ import {
 import { EventsOff, EventsOn } from '../wailsjs/runtime/runtime';
 import { main } from '../wailsjs/go/models';
 import ContextMenu from './components/ContextMenu';
+import DomainAnalysisModal from './components/DomainAnalysisModal';
 import FloatingWindow from './components/FloatingWindow';
 import HistoryModal from './components/HistoryModal';
 import HopList from './components/HopList';
@@ -109,6 +110,7 @@ const App = () => {
   const [tracingSubs, setTracingSubs] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; host: string; label: string } | null>(null);
   const [portScan, setPortScan] = useState<{ host: string; label: string } | null>(null);
+  const [domainOpen, setDomainOpen] = useState(false);
   const [logChannels, setLogChannels] = useState<Record<string, LogLine[]>>({});
   const busyRef = useRef(false);
   const toastTimer = useRef<number | null>(null);
@@ -141,6 +143,10 @@ const App = () => {
   );
   const appendPortLog = useCallback(
     (level: LogLevel, text: string) => appendLog(level, text, 'ports'),
+    [appendLog],
+  );
+  const appendDomainLog = useCallback(
+    (level: LogLevel, text: string) => appendLog(level, text, 'console'),
     [appendLog],
   );
 
@@ -477,6 +483,15 @@ const App = () => {
     setPortScan({ host: trimmed, label: trimmed });
     openWindow('ports', { title: `PORTS · ${trimmed}` });
   }, [openWindow, target]);
+
+  const handleDomainAnalysis = useCallback(() => {
+    if (!target.trim()) {
+      setError('Enter a domain to analyze.');
+      return;
+    }
+    setError(null);
+    setDomainOpen(true);
+  }, [target]);
 
   const handleScanConfirm = useCallback(
     (options: ScanOptions) => {
@@ -888,6 +903,7 @@ const App = () => {
         isLoading={isLoading}
         onTrace={handleTrace}
         onScan={handleScan}
+        onDomainAnalysis={handleDomainAnalysis}
         onPortScan={handlePortScan}
         onNet={() => openNetcat(target.trim())}
         onConsole={openConsole}
@@ -1116,6 +1132,14 @@ const App = () => {
         label={portScan?.label}
         onClose={() => setPortScan(null)}
         onLog={appendPortLog}
+      />
+
+      <DomainAnalysisModal
+        open={domainOpen}
+        domain={target}
+        onDomainChange={setTarget}
+        onClose={() => setDomainOpen(false)}
+        onLog={appendDomainLog}
       />
 
       {contextMenu && (

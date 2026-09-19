@@ -1,3 +1,224 @@
+export namespace domaincheck {
+	
+	export class Check {
+	    id: string;
+	    category: string;
+	    title: string;
+	    status: string;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Check(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.category = source["category"];
+	        this.title = source["title"];
+	        this.status = source["status"];
+	        this.detail = source["detail"];
+	    }
+	}
+	export class DNSRecord {
+	    type: string;
+	    name: string;
+	    value: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DNSRecord(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.name = source["name"];
+	        this.value = source["value"];
+	    }
+	}
+	export class DNSReport {
+	    records: DNSRecord[];
+	    txt: string[];
+	    spf: string[];
+	    spfPolicy?: string;
+	    spfLookups: number;
+	    dmarc: string[];
+	    dmarcPolicy?: string;
+	    dmarcRua?: string[];
+	    dkim: string[];
+	    mtaSts?: string[];
+	    tlsRpt?: string[];
+	    caa: string[];
+	    dnsKey: boolean;
+	    ds: boolean;
+	    nameservers: string[];
+	    mx: string[];
+	    addresses: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DNSReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.records = this.convertValues(source["records"], DNSRecord);
+	        this.txt = source["txt"];
+	        this.spf = source["spf"];
+	        this.spfPolicy = source["spfPolicy"];
+	        this.spfLookups = source["spfLookups"];
+	        this.dmarc = source["dmarc"];
+	        this.dmarcPolicy = source["dmarcPolicy"];
+	        this.dmarcRua = source["dmarcRua"];
+	        this.dkim = source["dkim"];
+	        this.mtaSts = source["mtaSts"];
+	        this.tlsRpt = source["tlsRpt"];
+	        this.caa = source["caa"];
+	        this.dnsKey = source["dnsKey"];
+	        this.ds = source["ds"];
+	        this.nameservers = source["nameservers"];
+	        this.mx = source["mx"];
+	        this.addresses = source["addresses"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Registration {
+	    found: boolean;
+	    source?: string;
+	    domain: string;
+	    registrar?: string;
+	    createdAt?: number;
+	    updatedAt?: number;
+	    expiresAt?: number;
+	    ageDays: number;
+	    daysToExpiry: number;
+	    statuses?: string[];
+	    nameservers?: string[];
+	    registrant?: string;
+	    country?: string;
+	    dnssec?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Registration(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.found = source["found"];
+	        this.source = source["source"];
+	        this.domain = source["domain"];
+	        this.registrar = source["registrar"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	        this.expiresAt = source["expiresAt"];
+	        this.ageDays = source["ageDays"];
+	        this.daysToExpiry = source["daysToExpiry"];
+	        this.statuses = source["statuses"];
+	        this.nameservers = source["nameservers"];
+	        this.registrant = source["registrant"];
+	        this.country = source["country"];
+	        this.dnssec = source["dnssec"];
+	        this.error = source["error"];
+	    }
+	}
+	export class WebReport {
+	    url: string;
+	    https: boolean;
+	    httpStatus?: number;
+	    redirectsHttps: boolean;
+	    tlsVersion?: string;
+	    certSubject?: string;
+	    certIssuer?: string;
+	    certNotBefore?: number;
+	    certNotAfter?: number;
+	    certDaysLeft: number;
+	    headers?: Record<string, string>;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WebReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.https = source["https"];
+	        this.httpStatus = source["httpStatus"];
+	        this.redirectsHttps = source["redirectsHttps"];
+	        this.tlsVersion = source["tlsVersion"];
+	        this.certSubject = source["certSubject"];
+	        this.certIssuer = source["certIssuer"];
+	        this.certNotBefore = source["certNotBefore"];
+	        this.certNotAfter = source["certNotAfter"];
+	        this.certDaysLeft = source["certDaysLeft"];
+	        this.headers = source["headers"];
+	        this.error = source["error"];
+	    }
+	}
+	export class Report {
+	    domain: string;
+	    analyzedAt: number;
+	    score: number;
+	    grade: string;
+	    checks: Check[];
+	    registration?: Registration;
+	    dns: DNSReport;
+	    web: WebReport;
+	
+	    static createFrom(source: any = {}) {
+	        return new Report(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.domain = source["domain"];
+	        this.analyzedAt = source["analyzedAt"];
+	        this.score = source["score"];
+	        this.grade = source["grade"];
+	        this.checks = this.convertValues(source["checks"], Check);
+	        this.registration = this.convertValues(source["registration"], Registration);
+	        this.dns = this.convertValues(source["dns"], DNSReport);
+	        this.web = this.convertValues(source["web"], WebReport);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace history {
 	
 	export class Hop {

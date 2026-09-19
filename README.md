@@ -5,8 +5,10 @@
 **A desktop traceroute visualizer.** tracemap runs `traceroute`/`tracert` from
 your own machine, geolocates every responsive hop, and draws the path on an
 interactive world map. It can resolve a domain's DNS records and trace every
-address it finds, save completed traces to a local database, and replay any
-selection back onto the map to compare routes and spot shared hops.
+address it finds, save completed traces to a local database, replay any
+selection back onto the map to compare routes and spot shared hops, and grade a
+domain's security and reliability with a WHOIS/RDAP, DNS, email-auth and TLS
+report.
 
 Built with [Wails v2](https://wails.io) — a Go backend bound directly to a
 React + TypeScript frontend, packaged as a single native binary.
@@ -49,8 +51,16 @@ highlighted as correlation points.*
   probe over common-port presets or a custom range, with randomised port order
   and jitter to reduce the scan signature. Open ports are optionally identified
   by banner grab, HTTP request and TLS handshake (server, certificate and ALPN).
+- **Domain analysis** — the **Tools ▾ → Domain analysis** report grades a domain
+  on security and reliability. Registration data comes from RDAP via the IANA
+  bootstrap, falling back to classic WHOIS (asking IANA for the registry server).
+  It checks domain age and expiry, registry status and nameserver redundancy;
+  SPF, DMARC, DKIM (common selectors), MTA-STS and TLS-RPT; DNSSEC and CAA; and
+  the HTTPS certificate, HTTP→HTTPS redirect, HSTS and security headers. The
+  result is a pass/warn/fail checklist with a weighted score and letter grade,
+  plus a detailed breakdown that can be exported to a text report.
 - **Interactive TCP sessions** — open a netcat-style session to a host and port
-  from the **Net** toolbar button or the right-click **Connect (nc)** action. A
+  from **Tools ▾ → Netcat** or the right-click **Connect (nc)** action. A
   line-oriented terminal in its own floating window sends what you type
   (LF/CRLF/none) and streams the peer's raw output back; optional TLS for
   encrypted services. TCP only.
@@ -104,13 +114,14 @@ through Wails bindings and runtime events.
 
 ```
 Wails window (React + Leaflet map UI)
-   │  Bind: Trace, Scan, ScanPorts, NetConnect, NetSend, NetClose, CheckTools, …
-   │  Events: trace:hop, trace:geo, trace:done, scan:targets, scan:crawlPage, scan:crawlLog, portscan:open, net:data, …
+   │  Bind: Trace, Scan, ScanPorts, NetConnect, NetSend, NetClose, AnalyzeDomain, ExportDomainReport, CheckTools, …
+   │  Events: trace:hop, trace:geo, trace:done, scan:targets, scan:crawlPage, scan:crawlLog, portscan:open, net:data, domain:progress, …
    ▼
 Go backend (in-process)
    ├── tracerouter  spawn system traceroute/tracert, parse output
    ├── geolocator   IP → lat/lon, city, country, ASN (remote + SQLite + mmdb)
    ├── dnscheck     A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
+   ├── domaincheck  domain security report (RDAP/WHOIS, DNS, email auth, web/TLS)
    ├── subdomains   local subdomain discovery (brute force, PTR, SPF/SRV)
    ├── webcrawl     browser-UA HTTP crawl (front page + 1 level, robots, sitemap)
    ├── portscan     TCP connect / UDP port scan + banner/HTTP/TLS probing
@@ -160,21 +171,26 @@ make clean        # remove build/bin, frontend/dist
    terminal window with verbose logs; discovered subdomains appear in the
    **SUBDOMAINS** pane, where you can select which ones to trace. Brute force can
    use the embedded wordlist or a custom file chosen with **Browse**.
-3. Press **Ports** in the toolbar to scan the target, or right-click a target in
-   the **TARGETS** pane, a hop in the hop list, or a marker on the map and
-   choose **Find open ports**. Pick **Common ports** (Top 20/100/1000) or a
+3. Open **Tools ▾** and choose **Port scan** to scan the target, or right-click a
+   target in the **TARGETS** pane, a hop in the hop list, or a marker on the map
+   and choose **Find open ports**. Pick **Common ports** (Top 20/100/1000) or a
    **Port range**, choose TCP or UDP, and optionally identify protocols. Open
    ports stream into the dialog as they are found.
-4. Press **Net** in the toolbar (or right-click a target/hop and choose
+4. Open **Tools ▾** and choose **Domain analysis** for a security and reliability
+   report on the current domain: WHOIS/RDAP registration, DNS and email-auth
+   records, DNSSEC/CAA and web/TLS. The checklist shows pass/warn/fail with a
+   score and grade; **Export** writes the full report to a text file.
+5. Open **Tools ▾** and choose **Netcat** (or right-click a target/hop and choose
    **Connect (nc)**) to open a netcat session in its own floating window. Enter
    a port, optionally enable **TLS**, connect, and type lines to send; output
    streams into the terminal. Choose the line ending (LF/CRLF/none) and press
-   **Disconnect** when done. Each session gets its own window.
-5. Click a splitter between the map and a side panel to collapse or expand that
+   **Disconnect** when done. Each session gets its own window. **Tools ▾ →
+   Console** opens the general activity console.
+6. Click a splitter between the map and a side panel to collapse or expand that
    panel — handy when you want more room for the map. Drag the splitter to
    resize instead.
-6. Press `Esc` or **Cancel** to stop a running operation.
-7. Press **+ History** to save the current view, and **History** to browse
+7. Press `Esc` or **Cancel** to stop a running operation.
+8. Press **+ History** to save the current view, and **History** to browse
    saved entries.
 
 Hops that have no coordinates (private addresses, geolocation misses) stay in
@@ -224,6 +240,7 @@ app.go                      App struct, bound methods, events
 internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP → geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
+internal/domaincheck/       domain security report (RDAP/WHOIS, DNS, email auth, web/TLS)
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/webcrawl/          browser-UA HTTP crawl (front page + 1 level, robots, sitemap)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
@@ -239,6 +256,8 @@ frontend/wailsjs/           generated bindings — do not edit by hand
 - Go tests live beside their packages and are table-driven.
 - `tracerouter` tests use a fake shell binary — no real traceroute.
 - `dnscheck` tests use a fake resolver — no network.
+- `domaincheck` tests use an `httptest` RDAP/web server, a fake resolver and raw
+  queryer, and a scripted WHOIS dialer — no external network.
 - `subdomains` tests use a fake resolver and a temp SQLite cache — no network.
 - `webcrawl` tests serve fixtures from an `httptest.Server` and dial it with a
   custom transport (plus a fake resolver) — no external network.
@@ -268,6 +287,9 @@ make check
   no shell is involved. TLS certificate verification is intentionally skipped
   because the goal is service identification, not trust. Connect only to hosts
   you are authorised to use.
+- Domain analysis makes outbound queries only to public sources: the IANA RDAP
+  bootstrap and registry RDAP/WHOIS servers, the system DNS resolver, and the
+  domain's own HTTP/HTTPS endpoints. No API keys are required.
 - No secrets or credentials are stored; all data stays in local SQLite files.
 
 ## License

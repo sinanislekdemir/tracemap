@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"traceroute/internal/appdata"
 	"traceroute/internal/dnscheck"
+	"traceroute/internal/domaincheck"
 	"traceroute/internal/geolocator"
 	"traceroute/internal/history"
 	"traceroute/internal/netcat"
@@ -27,27 +29,28 @@ import (
 
 // Event names emitted to the frontend.
 const (
-	EventHop          = "trace:hop"
-	EventGeo          = "trace:geo"
-	EventTarget       = "trace:target"
-	EventTargetGeo    = "trace:targetGeo"
-	EventDone         = "trace:done"
-	EventError        = "trace:error"
-	EventScanRecords  = "scan:records"
-	EventScanTargets  = "scan:targets"
-	EventScanDone     = "scan:done"
-	EventSubdomains   = "scan:subdomains"
-	EventScanProgress = "scan:progress"
-	EventCrawlPage    = "scan:crawlPage"
-	EventCrawl        = "scan:crawl"
-	EventCrawlLog     = "scan:crawlLog"
-	EventPortOpen     = "portscan:open"
-	EventPortProgress = "portscan:progress"
-	EventPortDone     = "portscan:done"
-	EventPortError    = "portscan:error"
-	EventNetData      = "net:data"
-	EventNetClosed    = "net:closed"
-	EventNetError     = "net:error"
+	EventHop            = "trace:hop"
+	EventGeo            = "trace:geo"
+	EventTarget         = "trace:target"
+	EventTargetGeo      = "trace:targetGeo"
+	EventDone           = "trace:done"
+	EventError          = "trace:error"
+	EventScanRecords    = "scan:records"
+	EventScanTargets    = "scan:targets"
+	EventScanDone       = "scan:done"
+	EventSubdomains     = "scan:subdomains"
+	EventScanProgress   = "scan:progress"
+	EventCrawlPage      = "scan:crawlPage"
+	EventCrawl          = "scan:crawl"
+	EventCrawlLog       = "scan:crawlLog"
+	EventPortOpen       = "portscan:open"
+	EventPortProgress   = "portscan:progress"
+	EventPortDone       = "portscan:done"
+	EventPortError      = "portscan:error"
+	EventNetData        = "net:data"
+	EventNetClosed      = "net:closed"
+	EventNetError       = "net:error"
+	EventDomainProgress = "domain:progress"
 )
 
 // scanConcurrency limits how many traces an advanced scan runs at once.
@@ -236,6 +239,12 @@ type ToolStatus struct {
 	Hint      string `json:"hint,omitempty"`
 }
 
+// DomainProgressEvent reports the current phase of a domain analysis.
+type DomainProgressEvent struct {
+	Phase   string `json:"phase"`
+	Message string `json:"message"`
+}
+
 // App is the Wails application backend.
 type App struct {
 	ctx    context.Context
@@ -245,10 +254,14 @@ type App struct {
 	subs   *subdomains.Store
 	ports  *portscan.Scanner
 	nc     *netcat.Manager
+	domain *domaincheck.Analyzer
 
 	mu     sync.Mutex
 	gen    uint64
 	cancel context.CancelFunc
+
+	domainMu     sync.Mutex
+	domainCancel context.CancelFunc
 }
 
 // NewApp creates the application backend.
@@ -258,6 +271,7 @@ func NewApp() *App {
 		geo:    geolocator.NewResolver(),
 		ports:  portscan.NewScanner(),
 		nc:     netcat.NewManager(),
+		domain: domaincheck.NewAnalyzer(),
 	}
 
 	store, err := history.Open(appdata.DefaultPath())
@@ -736,6 +750,72 @@ func (a *App) NetSend(sessionID string, data string) error {
 // NetClose ends a netcat session.
 func (a *App) NetClose(sessionID string) error {
 	return a.nc.Close(sessionID)
+}
+
+// AnalyzeDomain builds a security and reliability report for a domain. It runs
+// with its own cancellation context, independent of the trace/scan model, so it
+// neither cancels nor is cancelled by traces. Progress is streamed through
+// domain:progress; the finished report is the return value.
+func (a *App) AnalyzeDomain(domain string) (domaincheck.Report, error) {
+	ctx, cancel := context.WithCancel(a.ctx)
+
+	a.domainMu.Lock()
+	if a.domainCancel != nil {
+		a.domainCancel()
+	}
+	a.domainCancel = cancel
+	a.domainMu.Unlock()
+
+	defer func() {
+		cancel()
+		a.domainMu.Lock()
+		a.domainCancel = nil
+		a.domainMu.Unlock()
+	}()
+
+	report, err := a.domain.Analyze(ctx, domain, func(phase, message string) {
+		runtime.EventsEmit(a.ctx, EventDomainProgress, DomainProgressEvent{Phase: phase, Message: message})
+	})
+	if err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
+// CancelDomainAnalysis stops a running domain analysis, if any.
+func (a *App) CancelDomainAnalysis() {
+	a.domainMu.Lock()
+	defer a.domainMu.Unlock()
+	if a.domainCancel != nil {
+		a.domainCancel()
+	}
+}
+
+// ExportDomainReport renders the report as text and writes it to a path chosen
+// by the user, returning the path (empty when the dialog is cancelled).
+func (a *App) ExportDomainReport(report domaincheck.Report) (string, error) {
+	name := strings.TrimSpace(report.Domain)
+	if name == "" {
+		name = "domain"
+	}
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Save domain analysis report",
+		DefaultFilename: name + "-domain-report.txt",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Text files (*.txt)", Pattern: "*.txt"},
+			{DisplayName: "All files", Pattern: "*"},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", nil
+	}
+	if err := os.WriteFile(path, []byte(domaincheck.FormatReport(report)), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // Cancel stops the running trace or scan, if any.

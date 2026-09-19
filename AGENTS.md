@@ -44,10 +44,11 @@ workflow that packs the `.deb`/`.rpm`/`.tar.gz`.
 
 ```
 main.go                     Wails entry; embeds frontend/dist; window options
-app.go                      App struct, bound methods (Trace/Scan/ScanPorts/Net*/Cancel/History/PickWordlist), events
+app.go                      App struct, bound methods (Trace/Scan/ScanPorts/Net*/AnalyzeDomain/ExportDomainReport/Cancel/History/PickWordlist), events
 internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP -> geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS lookup -> trace targets
+internal/domaincheck/       domain security report (RDAP/WHOIS, DNS, email auth, web/TLS)
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/webcrawl/          browser-UA HTTP crawl (frontpage + 1 level, robots, sitemap)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
@@ -130,6 +131,20 @@ PLAN.md                     design/architecture document
   `portscan:error`; results are not persisted. `ScanPorts` uses the shared
   `App.begin()` cancel model, so it cancels (and is cancelled by) other
   operations.
+- **Domain analysis** (`internal/domaincheck`): builds a security/reliability
+  report for a domain. Registration comes from RDAP via the IANA bootstrap
+  (`data.iana.org/rdap/dns.json`, cached in memory), falling back to classic
+  WHOIS on port 43 (ask `whois.iana.org` for the registry `refer:`). DNS checks
+  cover TXT/SPF/DMARC/common DKIM selectors/MTA-STS/TLS-RPT via `net.Resolver`,
+  plus CAA/DNSKEY/DS through raw `dnsmessage` queries (net.Resolver has no such
+  methods). Web checks capture the HTTP→HTTPS redirect, TLS certificate and
+  security headers via `httptrace`. `Analyzer.Analyze` runs each phase
+  best-effort and returns a `Report` with a pass/warn/fail checklist, a weighted
+  score and a letter grade; `domaincheck.FormatReport` renders the export text.
+  Bound methods: `AnalyzeDomain` (streams `domain:progress`, own cancellation
+  context independent of `App.begin()`) and `ExportDomainReport` (native save
+  dialog). The frontend `DomainAnalysisModal` shows the checklist and details and
+  offers Export.
 - **Interactive TCP sessions** (`internal/netcat`): line-oriented netcat in a
   floating terminal window. `App.NetConnect` opens a `netcat.Session` (optional
   TLS) and a reader goroutine streams raw bytes as `net:data` events (Go
@@ -168,13 +183,19 @@ PLAN.md                     design/architecture document
   `viewMode='history'` (exited by running a new trace or the app-bar EXIT).
 - `buildDisplayHops()` (`src/traces.ts`) appends/marks the resolved target IP as
   the final list entry; `isLocated()` treats `(0, 0)` as "no coordinates".
-- **Port scan entry points**: the toolbar **Ports** button opens `PortScanModal`
+- **Tools dropdown**: `Trace` and `Scan` are top-level toolbar buttons; the
+  **Tools ▾** button opens a `ContextMenu`-based dropdown (anchored to the
+  button) holding **Domain analysis**, **Port scan**, **Netcat** and **Console**.
+- **Port scan entry points**: the toolbar **Ports** item opens `PortScanModal`
   for the current target. The right-click context menu (`ContextMenu.tsx`, a
   generic cursor menu raised by `HopList`, `TraceList` and the map markers)
   offers **Find open ports** for a specific IP. The modal goes options → live
   results, owns its own `portscan:*` subscriptions, and streams results in
   place. Do not add a `window` `contextmenu` listener to close the menu — it can
   fire for the same event that opened it; `pointerdown`/`blur`/`Escape` suffice.
+- **Domain analysis**: `DomainAnalysisModal` runs `AnalyzeDomain`, listens to
+  `domain:progress`, and renders the checklist/details; **Export** calls
+  `ExportDomainReport`. It uses its own cancellation (independent of traces).
 - After adding or renaming a bound Go method, run `make bindings` or the
   frontend imports will not compile.
 
@@ -183,6 +204,8 @@ PLAN.md                     design/architecture document
 - Go tests live beside their packages; use table-driven style.
 - `tracerouter` tests use a fake shell binary via `Runner.Binary`.
 - `dnscheck` tests use a fake `Resolver` — no real network.
+- `domaincheck` tests use an `httptest` RDAP/web server, a fake resolver/raw
+  queryer and a scripted WHOIS dialer; no external network.
 - `geolocator` tests use fake lookups/stores; real-DB tests skip when absent.
 - `history` tests use a temp-file SQLite store; no network.
 - `subdomains` tests use a fake resolver and a temp SQLite cache; no network.

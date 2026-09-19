@@ -46,10 +46,12 @@ const DEEP: ScanOptions = {
   sweep24: true,
   services: true,
   crawl: true,
-  crawlMaxPages: 50,
-  autoTrace: false,
-  maxTargets: 48,
+  crawlMaxPages: 100,
+  autoTrace: true,
+  maxTargets: 200,
 };
+
+const DEEP_MAX_HOPS = 100;
 
 const ScanModal = ({
   open,
@@ -141,7 +143,7 @@ const ScanModal = ({
                 className="input input--num selectable"
                 type="number"
                 min={1}
-                max={64}
+                max={100}
                 value={maxHops}
                 onChange={(event) => onMaxHopsChange(Number(event.target.value) || 30)}
               />
@@ -155,7 +157,14 @@ const ScanModal = ({
             <button type="button" className="btn btn--ghost" onClick={() => setOptions(STANDARD)}>
               Standard
             </button>
-            <button type="button" className="btn btn--ghost" onClick={() => setOptions(DEEP)}>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => {
+                setOptions(DEEP);
+                onMaxHopsChange(DEEP_MAX_HOPS);
+              }}
+            >
               Deep
             </button>
           </div>
@@ -300,15 +309,15 @@ const ScanModal = ({
               <label className="field-label" htmlFor="scan-cap">
                 MAX TARGETS
               </label>
-              <input
-                id="scan-cap"
-                className="input input--num selectable"
-                type="number"
-                min={1}
-                max={128}
-                value={options.maxTargets}
-                onChange={(event) => set({ maxTargets: Number(event.target.value) || 24 })}
-              />
+                <input
+                  id="scan-cap"
+                  className="input input--num selectable"
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={options.maxTargets}
+                  onChange={(event) => set({ maxTargets: Number(event.target.value) || 24 })}
+                />
             </div>
           </div>
         </div>

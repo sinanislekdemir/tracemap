@@ -21,6 +21,7 @@ import (
 	"traceroute/internal/geolocator"
 	"traceroute/internal/history"
 	"traceroute/internal/netcat"
+	"traceroute/internal/origin"
 	"traceroute/internal/portscan"
 	"traceroute/internal/subdomains"
 	"traceroute/internal/tracerouter"
@@ -51,6 +52,8 @@ const (
 	EventNetClosed      = "net:closed"
 	EventNetError       = "net:error"
 	EventDomainProgress = "domain:progress"
+	EventOriginProgress = "origin:progress"
+	EventOriginLog      = "origin:log"
 )
 
 // scanConcurrency limits how many traces an advanced scan runs at once.
@@ -245,6 +248,18 @@ type DomainProgressEvent struct {
 	Message string `json:"message"`
 }
 
+// OriginProgressEvent reports the current phase of origin discovery.
+type OriginProgressEvent struct {
+	Phase   string `json:"phase"`
+	Message string `json:"message"`
+}
+
+// OriginLogEvent is a verbose origin-discovery step, streamed to the terminal.
+type OriginLogEvent struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
+}
+
 // App is the Wails application backend.
 type App struct {
 	ctx    context.Context
@@ -262,6 +277,9 @@ type App struct {
 
 	domainMu     sync.Mutex
 	domainCancel context.CancelFunc
+
+	originMu     sync.Mutex
+	originCancel context.CancelFunc
 }
 
 // NewApp creates the application backend.
@@ -813,6 +831,165 @@ func (a *App) ExportDomainReport(report domaincheck.Report) (string, error) {
 		return "", nil
 	}
 	if err := os.WriteFile(path, []byte(domaincheck.FormatReport(report)), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// UnmaskTarget discovers the origin address behind a CDN or reverse proxy. It
+// combines the domain's DNS footprint (including the most recent scan's
+// subdomains) with direct fingerprint verification. It runs with its own
+// cancellation context, independent of traces and scans. When customRules is
+// true the intermediary-marker rules are read from the user's rules file;
+// otherwise the built-in defaults are used.
+func (a *App) UnmaskTarget(domain string, customRules bool) (origin.Report, error) {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return origin.Report{}, errors.New("no target domain provided")
+	}
+
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.originMu.Lock()
+	if a.originCancel != nil {
+		a.originCancel()
+	}
+	a.originCancel = cancel
+	a.originMu.Unlock()
+
+	defer func() {
+		cancel()
+		a.originMu.Lock()
+		a.originCancel = nil
+		a.originMu.Unlock()
+	}()
+
+	var subs []subdomains.Result
+	if a.subs != nil {
+		if cached, err := a.subs.Load(ctx, domain); err == nil {
+			subs = cached
+		}
+	}
+
+	rules := origin.DefaultRules()
+	if customRules {
+		loaded, err := origin.LoadRules(unmaskRulesPath())
+		if err != nil {
+			runtime.EventsEmit(a.ctx, EventError, ErrorEvent{
+				Target:  0,
+				Message: fmt.Sprintf("unmask rules file could not be read, using defaults: %v", err),
+			})
+		}
+		rules = loaded
+	}
+
+	report := origin.Discover(ctx, domain, origin.Options{
+		Subdomains: subs,
+		Rules:      rules,
+		OnProgress: func(phase, message string) {
+			runtime.EventsEmit(a.ctx, EventOriginProgress, OriginProgressEvent{Phase: phase, Message: message})
+		},
+		OnLog: func(level, message string) {
+			runtime.EventsEmit(a.ctx, EventOriginLog, OriginLogEvent{Level: level, Message: message})
+		},
+	})
+
+	for i := range report.Origins {
+		verdict := report.Origins[i].Verdict
+		if verdict != origin.VerdictConfirmed && verdict != origin.VerdictLikely {
+			continue
+		}
+		if data, err := a.geo.ResolveOne(ctx, report.Origins[i].IP); err == nil {
+			report.Origins[i].Geo = data
+		}
+	}
+	return report, nil
+}
+
+// UnmaskRulesInfo is the location and existence of the user's unmask rules file.
+type UnmaskRulesInfo struct {
+	Path   string `json:"path"`
+	Exists bool   `json:"exists"`
+}
+
+// UnmaskRulesPath reports where the unmask rules file lives and whether it
+// exists, so the UI can offer to load or create it.
+func (a *App) UnmaskRulesPath() UnmaskRulesInfo {
+	path := unmaskRulesPath()
+	if path == "" {
+		return UnmaskRulesInfo{}
+	}
+	_, err := os.Stat(path)
+	return UnmaskRulesInfo{Path: path, Exists: err == nil}
+}
+
+// CreateUnmaskRules copies the built-in marker rules to the user's rules file
+// for maintenance, asking before overwriting an existing file. It returns the
+// path (empty when the user cancels).
+func (a *App) CreateUnmaskRules() (string, error) {
+	path := unmaskRulesPath()
+	if path == "" {
+		return "", errors.New("no configuration directory available")
+	}
+	if _, err := os.Stat(path); err == nil {
+		choice, err := runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
+			Type:    runtime.QuestionDialog,
+			Title:   "Unmask rules",
+			Message: "The rules file already exists. Overwrite it with the built-in defaults?",
+			Buttons: []string{"Overwrite", "Cancel"},
+		})
+		if err != nil {
+			return "", err
+		}
+		if choice != "Overwrite" {
+			return "", nil
+		}
+	}
+	if err := origin.SaveRules(path, origin.DefaultRules()); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// unmaskRulesPath is the user's unmask marker rules file.
+func unmaskRulesPath() string {
+	dir := appdata.ConfigDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "unmask-rules.json")
+}
+
+// CancelUnmaskTarget stops a running origin discovery, if any.
+func (a *App) CancelUnmaskTarget() {
+	a.originMu.Lock()
+	defer a.originMu.Unlock()
+	if a.originCancel != nil {
+		a.originCancel()
+	}
+}
+
+// ExportOriginReport renders the report as text and writes it to a path chosen
+// by the user, returning the path (empty when the dialog is cancelled).
+func (a *App) ExportOriginReport(report origin.Report) (string, error) {
+	name := strings.TrimSpace(report.Domain)
+	if name == "" {
+		name = "target"
+	}
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Save origin discovery report",
+		DefaultFilename: name + "-origin-report.txt",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Text files (*.txt)", Pattern: "*.txt"},
+			{DisplayName: "All files", Pattern: "*"},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", nil
+	}
+	if err := os.WriteFile(path, []byte(origin.FormatReport(report)), 0o644); err != nil {
 		return "", err
 	}
 	return path, nil

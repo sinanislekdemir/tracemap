@@ -11,6 +11,8 @@ interface ToolbarProps {
   onTrace: () => void;
   onScan: () => void;
   onDomainAnalysis: () => void;
+  onUnmask: () => void;
+  canUnmask: boolean;
   onPortScan: () => void;
   onNet: () => void;
   onConsole: () => void;
@@ -29,6 +31,8 @@ const Toolbar = ({
   onTrace,
   onScan,
   onDomainAnalysis,
+  onUnmask,
+  canUnmask,
   onPortScan,
   onNet,
   onConsole,
@@ -91,7 +95,7 @@ const Toolbar = ({
           className="input input--num selectable"
           type="number"
           min={1}
-          max={64}
+          max={100}
           value={maxHops}
           onChange={(event) => onMaxHopsChange(Number(event.target.value) || 30)}
         />
@@ -109,7 +113,7 @@ const Toolbar = ({
         ref={toolsRef}
         className={`btn btn--tools${toolsOpen ? ' is-open' : ''}`}
         onClick={() => (toolsOpen ? setToolsOpen(false) : openTools())}
-        title="Additional tools: domain analysis, port scan, netcat and console"
+        title="Additional tools: domain analysis, unmask target, port scan, netcat and console"
         aria-haspopup="menu"
         aria-expanded={toolsOpen}
       >
@@ -143,6 +147,12 @@ const Toolbar = ({
               label: 'Domain analysis',
               hint: 'WHOIS · DNS · TLS',
               onSelect: runTool(onDomainAnalysis),
+            },
+            {
+              label: 'Unmask target',
+              hint: canUnmask ? 'find origin IP' : 'scanning must complete to use this tool',
+              disabled: !canUnmask,
+              onSelect: runTool(onUnmask),
             },
             {
               label: 'Port scan',

@@ -1724,6 +1724,12 @@ body {
   overflow-y: auto;
   border-bottom: 1px solid var(--border);
 }
+.sub-waiting {
+  padding: 8px 10px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
 .sub-pane {
   padding: 6px;
 }
@@ -1901,6 +1907,18 @@ body {
 .ctx-menu-item--danger:hover {
   background: rgba(255, 107, 107, 0.14);
   color: var(--err);
+}
+.ctx-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ctx-menu-item:disabled:hover {
+  background: transparent;
+  color: var(--text);
+}
+.ctx-menu-item:disabled .ctx-menu-hint {
+  white-space: normal;
+  text-align: right;
 }
 .ctx-menu-label {
   white-space: nowrap;
@@ -2334,4 +2352,187 @@ body {
   font-family: var(--mono);
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+
+/* ---------- origin / unmask target ---------- */
+
+.origin-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  line-height: 1;
+  filter: drop-shadow(0 0 5px rgba(245, 182, 66, 0.85));
+  background: none;
+  border: none;
+}
+
+.map-hud-origin {
+  color: var(--warn);
+}
+
+.origin-warning {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border: 1px solid rgba(245, 182, 66, 0.4);
+  border-radius: 6px;
+  background: rgba(245, 182, 66, 0.08);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.origin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.origin-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+}
+.origin-verdict {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+}
+.origin-verdict--confirmed {
+  color: var(--ok);
+  border-color: rgba(61, 220, 151, 0.45);
+  background: rgba(61, 220, 151, 0.1);
+}
+.origin-verdict--likely {
+  color: var(--warn);
+  border-color: rgba(245, 182, 66, 0.45);
+  background: rgba(245, 182, 66, 0.1);
+}
+.origin-verdict--proxy {
+  color: var(--text-faint);
+}
+.origin-verdict--dead {
+  color: var(--err);
+  border-color: rgba(255, 107, 107, 0.35);
+}
+.origin-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.origin-ip {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+.origin-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.origin-chip {
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(61, 220, 151, 0.4);
+  background: rgba(61, 220, 151, 0.08);
+  color: var(--ok);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+.origin-chip--muted {
+  border-color: var(--border-strong);
+  background: none;
+  color: var(--text-faint);
+}
+.origin-chip--bad {
+  border-color: rgba(255, 107, 107, 0.4);
+  background: rgba(255, 107, 107, 0.08);
+  color: var(--err);
+}
+.origin-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+.origin-note-inline {
+  font-size: 10px;
+  color: var(--warn);
+  overflow-wrap: anywhere;
+}
+.origin-log {
+  display: flex;
+  flex-direction: column;
+  height: 190px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.origin-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.origin-note {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.origin-rules {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.origin-rule-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.origin-rule-option:hover {
+  border-color: var(--border-strong);
+}
+.origin-rule-option.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.origin-rule-title {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.origin-rule-desc {
+  font-size: 10px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+.origin-rules-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 7px;
+}
+.origin-rules-hint {
+  font-size: 10px;
+  color: var(--text-faint);
 }

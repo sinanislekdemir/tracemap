@@ -14,6 +14,10 @@ export function CancelDomainAnalysis() {
   return window['go']['main']['App']['CancelDomainAnalysis']();
 }
 
+export function CancelUnmaskTarget() {
+  return window['go']['main']['App']['CancelUnmaskTarget']();
+}
+
 export function CheckTools() {
   return window['go']['main']['App']['CheckTools']();
 }
@@ -22,12 +26,20 @@ export function ClearHistory() {
   return window['go']['main']['App']['ClearHistory']();
 }
 
+export function CreateUnmaskRules() {
+  return window['go']['main']['App']['CreateUnmaskRules']();
+}
+
 export function DeleteHistory(arg1) {
   return window['go']['main']['App']['DeleteHistory'](arg1);
 }
 
 export function ExportDomainReport(arg1) {
   return window['go']['main']['App']['ExportDomainReport'](arg1);
+}
+
+export function ExportOriginReport(arg1) {
+  return window['go']['main']['App']['ExportOriginReport'](arg1);
 }
 
 export function ListHistory() {
@@ -72,4 +84,12 @@ export function Trace(arg1) {
 
 export function TraceTargets(arg1) {
   return window['go']['main']['App']['TraceTargets'](arg1);
+}
+
+export function UnmaskRulesPath() {
+  return window['go']['main']['App']['UnmaskRulesPath']();
+}
+
+export function UnmaskTarget(arg1, arg2) {
+  return window['go']['main']['App']['UnmaskTarget'](arg1, arg2);
 }

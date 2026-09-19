@@ -201,6 +201,18 @@ final entry in the hop list and map, even when the trace never reaches it.
 10. **M9 — Port scanning**: right-click context menu on targets/hops/markers,
     options → live-results modal, TCP connect + best-effort UDP scan over
     presets/ranges, banner/HTTP/TLS service identification. ✅
+11. **M10 — Unmask target**: keyless origin discovery behind CDNs/proxies.
+    Mines the target's own DNS footprint (reused scan subdomains, MX, SPF
+    `ip4:`/`ip6:`, cert SANs), connects directly to each candidate with SNI/Host
+    pinned to the domain, and compares cert SHA-256, favicon and body against
+    the proxied baseline. No vendor ranges or third-party services; generic
+    intermediary headers and a shared-edge SNI probe gate the verdict. The
+    marker set is loadable from an editable `unmask-rules.json` (defaults
+    embedded, `CreateUnmaskRules` materialises it). Verbose progress streams to
+    an inline LIVE LOG pane in the modal. Map building markers for
+    confirmed/likely origins; the tool is gated on a completed scan. ✅
+    (NSEC/AXFR zone enumeration is a phase-3 TODO in
+    `internal/origin/zone.go`.)
 
 ## 7. Risks & Mitigations
 

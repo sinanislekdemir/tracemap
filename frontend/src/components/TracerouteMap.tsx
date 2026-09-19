@@ -2,15 +2,17 @@ import { Fragment, useEffect } from 'react';
 import {
   CircleMarker,
   MapContainer,
+  Marker,
   Polyline,
   Popup,
   ScaleControl,
   TileLayer,
   useMap,
 } from 'react-leaflet';
+import { divIcon } from 'leaflet';
 import type { LatLngBoundsExpression, LatLngExpression } from 'leaflet';
 import { buildDisplayHops, isLocated } from '../traces';
-import type { HopData, TraceState } from '../types';
+import type { HopData, OriginMarker, TraceState } from '../types';
 
 interface TracerouteMapProps {
   traces: TraceState[];
@@ -21,6 +23,7 @@ interface TracerouteMapProps {
   onSelectHop: (hop: number) => void;
   onContextMenu?: (host: string, label: string, x: number, y: number) => void;
   sharedHops?: Map<string, number>;
+  origins?: OriginMarker[];
 }
 
 const DEFAULT_CENTER: LatLngExpression = [25, 10];
@@ -29,6 +32,15 @@ const DEFAULT_ZOOM = 2;
 const TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+// originIcon marks a confirmed/likely origin discovered by "Unmask target".
+const originIcon = divIcon({
+  className: 'origin-marker',
+  html: '🏢',
+  iconSize: [28, 28],
+  iconAnchor: [14, 14],
+  popupAnchor: [0, -14],
+});
 
 type Coord = [number, number];
 
@@ -120,6 +132,7 @@ const TracerouteMap = ({
   onSelectHop,
   onContextMenu,
   sharedHops,
+  origins,
 }: TracerouteMapProps) => {
   const visible = selectedTraces.size === 0 ? traces : traces.filter((trace) => selectedTraces.has(trace.id));
 
@@ -130,7 +143,8 @@ const TracerouteMap = ({
     return { trace, hops, located, coords, route: buildRoute(coords) };
   });
 
-  const allCoords = rendered.flatMap((entry) => entry.coords);
+  const originCoords = (origins ?? []).map((origin) => [origin.lat, origin.lon] as Coord);
+  const allCoords = [...rendered.flatMap((entry) => entry.coords), ...originCoords];
   const totalHops = rendered.reduce((sum, entry) => sum + entry.hops.length, 0);
   const totalLocated = rendered.reduce((sum, entry) => sum + entry.located.length, 0);
 
@@ -235,6 +249,20 @@ const TracerouteMap = ({
             );
           })}
 
+          {(origins ?? []).map((origin) => (
+            <Marker key={`origin:${origin.ip}`} position={[origin.lat, origin.lon]} icon={originIcon}>
+              <Popup>
+                <b>🏢 ORIGIN</b>
+                <br />
+                {origin.ip}
+                <br />
+                {origin.label}
+                <br />
+                VERDICT&nbsp;{origin.verdict}
+              </Popup>
+            </Marker>
+          ))}
+
           <MapEffects positions={allCoords} focus={focus} focusActive={selectedHop != null} />
         </MapContainer>
 
@@ -261,6 +289,9 @@ const TracerouteMap = ({
           <b>{totalLocated}</b>/{totalHops} LOCATED
           {sharedHops && sharedHops.size > 0 ? (
             <span className="map-hud-shared"> · {sharedHops.size} SHARED</span>
+          ) : null}
+          {origins && origins.length > 0 ? (
+            <span className="map-hud-origin"> · {origins.length} ORIGIN</span>
           ) : null}
         </div>
       </div>

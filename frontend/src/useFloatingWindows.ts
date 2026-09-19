@@ -15,6 +15,7 @@ const DEFAULT_SIZES: Record<TerminalKind, { width: number; height: number }> = {
   crawl: { width: 620, height: 360 },
   trace: { width: 540, height: 300 },
   ports: { width: 520, height: 300 },
+  origin: { width: 640, height: 400 },
   netcat: { width: 640, height: 440 },
 };
 

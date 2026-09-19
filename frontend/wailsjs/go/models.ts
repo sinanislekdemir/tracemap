@@ -219,6 +219,33 @@ export namespace domaincheck {
 
 }
 
+export namespace geolocator {
+	
+	export class GeoData {
+	    lat: number;
+	    lon: number;
+	    city: string;
+	    country: string;
+	    asn: string;
+	    resolved: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GeoData(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.lat = source["lat"];
+	        this.lon = source["lon"];
+	        this.city = source["city"];
+	        this.country = source["country"];
+	        this.asn = source["asn"];
+	        this.resolved = source["resolved"];
+	    }
+	}
+
+}
+
 export namespace history {
 	
 	export class Hop {
@@ -605,6 +632,212 @@ export namespace main {
 	        this.maxHops = source["maxHops"];
 	        this.hosts = source["hosts"];
 	    }
+	}
+	export class UnmaskRulesInfo {
+	    path: string;
+	    exists: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new UnmaskRulesInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.exists = source["exists"];
+	    }
+	}
+
+}
+
+export namespace origin {
+	
+	export class CertInfo {
+	    sha256: string;
+	    subject?: string;
+	    issuer?: string;
+	    sans?: string[];
+	    notAfter?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CertInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sha256 = source["sha256"];
+	        this.subject = source["subject"];
+	        this.issuer = source["issuer"];
+	        this.sans = source["sans"];
+	        this.notAfter = source["notAfter"];
+	    }
+	}
+	export class Baseline {
+	    proxiedIps: string[];
+	    proxied: boolean;
+	    markers?: string[];
+	    cert: CertInfo;
+	    status: number;
+	    headers?: Record<string, string>;
+	    faviconSha?: string;
+	    bodySha?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Baseline(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.proxiedIps = source["proxiedIps"];
+	        this.proxied = source["proxied"];
+	        this.markers = source["markers"];
+	        this.cert = this.convertValues(source["cert"], CertInfo);
+	        this.status = source["status"];
+	        this.headers = source["headers"];
+	        this.faviconSha = source["faviconSha"];
+	        this.bodySha = source["bodySha"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Candidate {
+	    ip: string;
+	    hostnames?: string[];
+	    sources: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Candidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ip = source["ip"];
+	        this.hostnames = source["hostnames"];
+	        this.sources = source["sources"];
+	    }
+	}
+	
+	export class Evidence {
+	    certMatch: boolean;
+	    faviconMatch: boolean;
+	    bodyMatch: boolean;
+	    statusMatch: boolean;
+	    proxyHeaders?: string[];
+	    sniVariance: boolean;
+	    fanIn: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Evidence(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.certMatch = source["certMatch"];
+	        this.faviconMatch = source["faviconMatch"];
+	        this.bodyMatch = source["bodyMatch"];
+	        this.statusMatch = source["statusMatch"];
+	        this.proxyHeaders = source["proxyHeaders"];
+	        this.sniVariance = source["sniVariance"];
+	        this.fanIn = source["fanIn"];
+	    }
+	}
+	export class Origin {
+	    ip: string;
+	    verdict: string;
+	    score: number;
+	    ports?: number[];
+	    cert: CertInfo;
+	    evidence: Evidence;
+	    geo: geolocator.GeoData;
+	    note?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Origin(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ip = source["ip"];
+	        this.verdict = source["verdict"];
+	        this.score = source["score"];
+	        this.ports = source["ports"];
+	        this.cert = this.convertValues(source["cert"], CertInfo);
+	        this.evidence = this.convertValues(source["evidence"], Evidence);
+	        this.geo = this.convertValues(source["geo"], geolocator.GeoData);
+	        this.note = source["note"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Report {
+	    domain: string;
+	    baseline: Baseline;
+	    candidates: Candidate[];
+	    origins: Origin[];
+	    notes?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Report(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.domain = source["domain"];
+	        this.baseline = this.convertValues(source["baseline"], Baseline);
+	        this.candidates = this.convertValues(source["candidates"], Candidate);
+	        this.origins = this.convertValues(source["origins"], Origin);
+	        this.notes = source["notes"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

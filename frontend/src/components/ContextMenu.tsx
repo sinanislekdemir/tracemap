@@ -4,6 +4,7 @@ export interface ContextMenuItem {
   label: string;
   hint?: string;
   danger?: boolean;
+  disabled?: boolean;
   onSelect: () => void;
 }
 
@@ -51,6 +52,8 @@ const ContextMenu = ({ x, y, title, items, onClose }: ContextMenuProps) => {
           type="button"
           role="menuitem"
           className={`ctx-menu-item${item.danger ? ' ctx-menu-item--danger' : ''}`}
+          disabled={item.disabled}
+          title={item.disabled ? item.hint : undefined}
           onClick={() => {
             onClose();
             item.onSelect();

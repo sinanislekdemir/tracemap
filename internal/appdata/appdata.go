@@ -37,3 +37,20 @@ func DefaultPath() string {
 	}
 	return ""
 }
+
+// ConfigDir returns the per-user configuration directory that holds the
+// database and any user-maintained rule files. It is derived from DefaultPath
+// so the two always agree. It returns "" when no configuration directory can
+// be determined (or when persistence is disabled via TRACEROUTE_DB).
+func ConfigDir() string {
+	if path := DefaultPath(); path != "" {
+		return filepath.Dir(path)
+	}
+	if dir, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(dir, dirName)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "."+dirName)
+	}
+	return ""
+}

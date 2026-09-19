@@ -203,6 +203,7 @@ export type TerminalKind =
   | 'crawl'
   | 'trace'
   | 'ports'
+  | 'origin'
   | 'netcat';
 
 export interface FloatingWindowState {
@@ -273,4 +274,29 @@ export type CheckStatus = 'pass' | 'warn' | 'fail' | 'info';
 export interface DomainProgressEvent {
   phase: string;
   message: string;
+}
+
+export interface OriginProgressEvent {
+  phase: string;
+  message: string;
+}
+
+export interface OriginLogEvent {
+  level: LogLevel;
+  message: string;
+}
+
+/** Location and existence of the user's unmask rules file. */
+export interface UnmaskRulesInfo {
+  path: string;
+  exists: boolean;
+}
+
+/** A confirmed/likely origin placed on the map. */
+export interface OriginMarker {
+  ip: string;
+  lat: number;
+  lon: number;
+  verdict: string;
+  label: string;
 }

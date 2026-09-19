@@ -21,6 +21,7 @@ import HistoryModal from './components/HistoryModal';
 import HopList from './components/HopList';
 import MissingToolModal from './components/MissingToolModal';
 import NetcatPanel from './components/NetcatPanel';
+import OriginModal from './components/OriginModal';
 import PortScanModal from './components/PortScanModal';
 import ScanModal from './components/ScanModal';
 import StatusBar from './components/StatusBar';
@@ -45,6 +46,7 @@ import type {
   HopEvent,
   LogLevel,
   LogLine,
+  OriginMarker,
   ScanOptions,
   ScanProgressEvent,
   ScanTarget,
@@ -107,10 +109,13 @@ const App = () => {
   const [subdomains, setSubdomains] = useState<SubdomainResult[]>([]);
   const [selectedSubs, setSelectedSubs] = useState<Set<string>>(new Set());
   const [scanProgress, setScanProgress] = useState<ScanProgressEvent | null>(null);
+  const [scanCompleted, setScanCompleted] = useState(false);
   const [tracingSubs, setTracingSubs] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; host: string; label: string } | null>(null);
   const [portScan, setPortScan] = useState<{ host: string; label: string } | null>(null);
   const [domainOpen, setDomainOpen] = useState(false);
+  const [originOpen, setOriginOpen] = useState(false);
+  const [originMarkers, setOriginMarkers] = useState<OriginMarker[]>([]);
   const [logChannels, setLogChannels] = useState<Record<string, LogLine[]>>({});
   const busyRef = useRef(false);
   const toastTimer = useRef<number | null>(null);
@@ -147,6 +152,10 @@ const App = () => {
   );
   const appendDomainLog = useCallback(
     (level: LogLevel, text: string) => appendLog(level, text, 'console'),
+    [appendLog],
+  );
+  const appendOriginLog = useCallback(
+    (level: LogLevel, text: string) => appendLog(level, text, 'origin'),
     [appendLog],
   );
 
@@ -330,6 +339,7 @@ const App = () => {
       );
       setSelectedTraces(new Set());
       setFocusedTrace(list[0]?.id ?? null);
+      setScanProgress(null);
       openStep('trace');
       appendLog('ok', `${list.length} targets queued`, 'trace');
       list.forEach((scanTarget) =>
@@ -341,6 +351,7 @@ const App = () => {
       setIsLoading(false);
       setScanProgress(null);
       setTracingSubs(false);
+      setScanCompleted(true);
       appendLog('ok', 'scan complete', 'trace');
       appendLog('ok', 'scan complete', 'console');
     });
@@ -429,6 +440,7 @@ const App = () => {
       setSelectedSubs(new Set());
       setScanProgress(null);
       setTracingSubs(false);
+      setOriginMarkers([]);
       setRightbarOpen(true);
       seenPhases.current.clear();
       dismissedWindows.current.clear();
@@ -493,6 +505,20 @@ const App = () => {
     setDomainOpen(true);
   }, [target]);
 
+  const handleUnmask = useCallback(() => {
+    const trimmed = target.trim();
+    if (!trimmed) {
+      setError('Enter a domain to unmask.');
+      return;
+    }
+    setError(null);
+    setOriginOpen(true);
+  }, [target]);
+
+  const handleOriginMarkers = useCallback((markers: OriginMarker[]) => {
+    setOriginMarkers(markers);
+  }, []);
+
   const handleScanConfirm = useCallback(
     (options: ScanOptions) => {
       const trimmed = target.trim();
@@ -501,9 +527,21 @@ const App = () => {
       }
       setScanOpen(false);
       startOperation('scan');
+      setScanCompleted(false);
       setLastTarget(trimmed);
+      // Open every enabled step's window up front so the UI shows the pending
+      // work immediately; discovery and crawl can take a while before their
+      // first event arrives.
       openWindow('dns', { title: `DNS · ${trimmed}` });
+      if (options.bruteForce || options.ptr || options.services) {
+        openWindow('subdomains', { title: `SUBDOMAINS · ${trimmed}` });
+      }
+      if (options.crawl) {
+        openWindow('crawl', { title: `CRAWL · ${trimmed}` });
+      }
+      openWindow('trace', { title: `TRACE · ${trimmed}` });
       appendLog('info', `▶ scan ${trimmed} · max ${maxHops} hops`, 'console');
+      appendLog('info', 'queued · waiting for DNS and discovery to finish', 'trace');
       Scan(main.ScanRequest.createFrom({ domain: trimmed, maxHops, options })).catch(() => {
         // Failures are surfaced through the trace:error event.
       });
@@ -904,6 +942,8 @@ const App = () => {
         onTrace={handleTrace}
         onScan={handleScan}
         onDomainAnalysis={handleDomainAnalysis}
+        onUnmask={handleUnmask}
+        canUnmask={scanCompleted}
         onPortScan={handlePortScan}
         onNet={() => openNetcat(target.trim())}
         onConsole={openConsole}
@@ -993,6 +1033,7 @@ const App = () => {
           onSelectHop={setSelectedHop}
           onContextMenu={(host, label, x, y) => openContextMenu(x, y, host, label)}
           sharedHops={sharedHops}
+          origins={originMarkers}
         />
 
         {hasDiscovery && (
@@ -1047,6 +1088,23 @@ const App = () => {
                 </div>
               </div>
             )}
+
+            {subdomains.length === 0 &&
+              scanProgress &&
+              (scanProgress.phase === 'subdomains' || scanProgress.phase === 'crawl') && (
+                <div className="rightbar-section">
+                  <div className="pane-head">
+                    <span>SUBDOMAINS</span>
+                    <span className="pane-count">…</span>
+                  </div>
+                  <div className="sub-scroll">
+                    <div className="sub-waiting">
+                      {scanProgress.phase === 'crawl' ? 'crawling' : 'discovering'}
+                      {scanProgress.total > 0 ? ` · ${scanProgress.done}/${scanProgress.total}` : '…'}
+                    </div>
+                  </div>
+                </div>
+              )}
           </aside>
         )}
       </div>
@@ -1140,6 +1198,15 @@ const App = () => {
         onDomainChange={setTarget}
         onClose={() => setDomainOpen(false)}
         onLog={appendDomainLog}
+      />
+
+      <OriginModal
+        open={originOpen}
+        domain={target}
+        onDomainChange={setTarget}
+        onClose={() => setOriginOpen(false)}
+        onLog={appendOriginLog}
+        onOrigins={handleOriginMarkers}
       />
 
       {contextMenu && (

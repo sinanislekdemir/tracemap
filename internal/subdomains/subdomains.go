@@ -348,6 +348,29 @@ func parseSPFHosts(txts []string) []string {
 	return hosts
 }
 
+// ParseSPFIPs returns the IP addresses and CIDR blocks referenced by the ip4:
+// and ip6: mechanisms of an SPF record. These often expose infrastructure (and
+// sometimes an origin address) that the domain's own A/AAAA records do not.
+func ParseSPFIPs(txts []string) []string {
+	var ips []string
+	for _, txt := range txts {
+		lower := strings.ToLower(strings.TrimSpace(txt))
+		if !strings.HasPrefix(lower, "v=spf1") && !strings.HasPrefix(lower, "spf2.0") {
+			continue
+		}
+		for _, token := range strings.Fields(txt) {
+			token = strings.TrimLeft(token, "+-~?")
+			switch {
+			case strings.HasPrefix(token, "ip4:"):
+				ips = append(ips, strings.TrimPrefix(token, "ip4:"))
+			case strings.HasPrefix(token, "ip6:"):
+				ips = append(ips, strings.TrimPrefix(token, "ip6:"))
+			}
+		}
+	}
+	return ips
+}
+
 // parseDMARCDomains returns the domains named in DMARC rua/ruf reports.
 func parseDMARCDomains(txts []string) []string {
 	var domains []string

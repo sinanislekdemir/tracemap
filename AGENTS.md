@@ -52,6 +52,7 @@ internal/domaincheck/       domain security report (RDAP/WHOIS, DNS, email auth,
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/webcrawl/          browser-UA HTTP crawl (frontpage + 1 level, robots, sitemap)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
+internal/origin/            keyless origin discovery behind CDNs/proxies ("unmask")
 internal/netcat/            interactive TCP sessions ("nc") for floating windows
 internal/history/           saved traces/scans (SQLite snapshot store)
 internal/appdata/           shared SQLite database path (tracemap.db)
@@ -154,6 +155,31 @@ PLAN.md                     design/architecture document
   (`NetcatPanel`) decodes base64, escapes control characters and caps scrollback;
   closing its window unmounts the panel and closes the session. TCP only; no UDP,
   ANSI terminal emulation, listen mode or file transfer.
+- **Origin discovery** (`internal/origin`, "Unmask target"): keyless, all-local
+  hunt for the true origin behind a CDN/reverse proxy. `App.UnmaskTarget`
+  (own cancellation context, like `AnalyzeDomain`) reuses the last scan's
+  subdomains (`subdomains.Store.Load`) plus the apex, MX hosts, SPF `ip4:`/`ip6:`
+  literals and baseline certificate SANs to build candidates, then connects
+  directly to each candidate (SNI/Host pinned to the domain) and compares its
+  TLS cert SHA-256, favicon and body against the proxied baseline. Content is
+  the decisive signal (a proxy passes body/favicon through unchanged) while the
+  baseline certificate is the edge's. An address is confirmed only when it
+  serves the target's content directly, is not a current DNS answer for the
+  domain, and shows no intermediary header (`via`, `x-cache`, `age`,
+  `x-served-by`, `x-cdn`, `cdn-*` and stable CDN marker header names such as
+  `cf-ray`/`x-amz-cf-id`); a shared-edge SNI probe is supporting evidence.
+  Verdicts: confirmed/likely/proxy/dead. The intermediary marker set is
+  configurable (`internal/origin/rules.go`): `App.UnmaskRulesPath` reports the
+  user's `unmask-rules.json` location, `App.CreateUnmaskRules` copies the
+  embedded defaults there for editing (under `appdata.ConfigDir()`), and
+  `App.UnmaskTarget(domain, customRules)` loads it when requested. Events:
+  `origin:progress` (phases) and `origin:log` (verbose per-step detail); the
+  frontend renders the log in an inline LIVE LOG pane inside the modal and also
+  mirrors it to the `origin` log channel. `App.ExportOriginReport` writes a
+  text report. The frontend `OriginModal` shows the baseline and candidates,
+  offers default/custom rules, and drops a building marker on the map for
+  confirmed/likely origins. NSEC/AXFR zone enumeration is a documented phase-3
+  TODO in `internal/origin/zone.go`.
 - **History** (`internal/history`): explicit snapshots of completed traces/scans
   in the shared `tracemap.db` (JSON blob per entry + denormalized counts).
   Bound methods: `SaveHistory`, `ListHistory`, `LoadHistory`,
@@ -169,8 +195,10 @@ PLAN.md                     design/architecture document
 - **Floating terminal windows** replace the old bottom dock. `useFloatingWindows`
   owns position/size/z-order; `FloatingWindow` is the draggable/resizable shell
   and `TerminalWindow` renders a channel's log lines (`ConsoleBody`). Each scan
-  step opens its own window as it starts (`dns`, `subdomains`, `crawl`, `trace`),
-  and netcat sessions each get a window. Log lines are stored per channel in
+  step opens its own window up front (`handleScanConfirm` opens the enabled
+  `dns`/`subdomains`/`crawl`/`trace` windows before the backend events arrive, so
+  slow discovery does not hide the pending steps), and netcat sessions each get
+  a window. Log lines are stored per channel in
   `App.tsx` (`logChannels`), capped per channel. Scan windows are closed at the
   start of a new operation; console/ports/netcat windows persist.
 - **react-leaflet gotcha:** `className` must be a **top-level prop** on
@@ -185,7 +213,8 @@ PLAN.md                     design/architecture document
   the final list entry; `isLocated()` treats `(0, 0)` as "no coordinates".
 - **Tools dropdown**: `Trace` and `Scan` are top-level toolbar buttons; the
   **Tools ▾** button opens a `ContextMenu`-based dropdown (anchored to the
-  button) holding **Domain analysis**, **Port scan**, **Netcat** and **Console**.
+  button) holding **Domain analysis**, **Unmask target**, **Port scan**,
+  **Netcat** and **Console**.
 - **Port scan entry points**: the toolbar **Ports** item opens `PortScanModal`
   for the current target. The right-click context menu (`ContextMenu.tsx`, a
   generic cursor menu raised by `HopList`, `TraceList` and the map markers)
@@ -196,6 +225,14 @@ PLAN.md                     design/architecture document
 - **Domain analysis**: `DomainAnalysisModal` runs `AnalyzeDomain`, listens to
   `domain:progress`, and renders the checklist/details; **Export** calls
   `ExportDomainReport`. It uses its own cancellation (independent of traces).
+- **Unmask target**: `OriginModal` runs `UnmaskTarget`, listens to
+  `origin:progress`/`origin:log`, and renders the baseline plus candidate
+  verdicts; the verbose log shows in an inline LIVE LOG pane (a fixed-height
+  `ConsoleBody`, ~10 lines) inside the modal and is also mirrored to the
+  `origin` channel. Confirmed/likely origins are passed up to `App.tsx` and
+  drawn on the map as 🏢 markers (`origin-marker` divIcon). Markers clear when a
+  new trace/scan starts. The Tools item is disabled until a scan completes
+  (`scanCompleted`), hinting "scanning must complete to use this tool".
 - After adding or renaming a bound Go method, run `make bindings` or the
   frontend imports will not compile.
 
@@ -209,6 +246,8 @@ PLAN.md                     design/architecture document
 - `geolocator` tests use fake lookups/stores; real-DB tests skip when absent.
 - `history` tests use a temp-file SQLite store; no network.
 - `subdomains` tests use a fake resolver and a temp SQLite cache; no network.
+- `origin` tests use a fake resolver, an `httptest` TLS server and an injected
+  dialer; no external network.
 - `webcrawl` tests serve fixtures from an `httptest.Server` and dial it with a
   custom transport (plus a fake resolver); no external network.
 - `portscan` tests scan localhost listeners and `httptest` HTTP/TLS servers; no

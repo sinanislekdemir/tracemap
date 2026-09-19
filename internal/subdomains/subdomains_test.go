@@ -250,3 +250,24 @@ func TestParseSPFHosts(t *testing.T) {
 		t.Errorf("got %d SPF hosts, want %d: %v", len(hosts), len(want), hosts)
 	}
 }
+
+func TestParseSPFIPs(t *testing.T) {
+	ips := ParseSPFIPs([]string{
+		"v=spf1 ip4:203.0.113.5/32 +ip4:198.51.100.7 ip6:2001:db8::1 -ip4:192.0.2.0/24 include:_spf.example.com -all",
+		"v=dmarc1 p=reject",
+	})
+	want := map[string]bool{
+		"203.0.113.5/32": true,
+		"198.51.100.7":   true,
+		"2001:db8::1":    true,
+		"192.0.2.0/24":   true,
+	}
+	if len(ips) != len(want) {
+		t.Fatalf("got %d SPF IPs, want %d: %v", len(ips), len(want), ips)
+	}
+	for _, ip := range ips {
+		if !want[ip] {
+			t.Errorf("unexpected SPF IP %q", ip)
+		}
+	}
+}

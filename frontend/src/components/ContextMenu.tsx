@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface ContextMenuItem {
   label: string;
@@ -34,7 +35,7 @@ const ContextMenu = ({ x, y, title, items, onClose }: ContextMenuProps) => {
     };
   }, [onClose]);
 
-  return (
+  return createPortal(
     <div
       className="ctx-menu"
       style={{ left: x, top: y }}
@@ -63,7 +64,8 @@ const ContextMenu = ({ x, y, title, items, onClose }: ContextMenuProps) => {
           {item.hint && <span className="ctx-menu-hint">{item.hint}</span>}
         </button>
       ))}
-    </div>
+    </div>,
+    document.body,
   );
 };
 

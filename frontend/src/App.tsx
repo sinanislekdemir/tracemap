@@ -14,6 +14,7 @@ import {
 } from '../wailsjs/go/main/App';
 import { EventsOff, EventsOn } from '../wailsjs/runtime/runtime';
 import { main } from '../wailsjs/go/models';
+import CheatsheetPanel from './components/CheatsheetPanel';
 import ContextMenu from './components/ContextMenu';
 import DomainAnalysisModal from './components/DomainAnalysisModal';
 import FloatingWindow from './components/FloatingWindow';
@@ -32,6 +33,7 @@ import TraceList from './components/TraceList';
 import TracerouteMap from './components/TracerouteMap';
 import { useFloatingWindows } from './useFloatingWindows';
 import { useSplitter } from './useSplitter';
+import { findCheatsheet } from './cheatsheets';
 import { TRACE_COLORS } from './colors';
 import { buildDisplayHops, isLocated } from './traces';
 import {
@@ -854,6 +856,17 @@ const App = () => {
     openWindow('console');
   }, [openWindow]);
 
+  const openCheatsheet = useCallback(
+    (sheetId: string) => {
+      const sheet = findCheatsheet(sheetId);
+      if (!sheet) {
+        return;
+      }
+      openWindow('cheatsheet', { title: `CHEATSHEET · ${sheet.title}`, sheet: sheet.id });
+    },
+    [openWindow],
+  );
+
   const activeTrace = traces.find((trace) => trace.id === focusedTrace) ?? traces[0];
   const displayHops = useMemo(() => (activeTrace ? buildDisplayHops(activeTrace) : []), [activeTrace]);
   const hasDiscovery = records.length > 0 || subdomains.length > 0;
@@ -1121,7 +1134,28 @@ const App = () => {
                 <NetcatPanel
                   request={win.host ? { host: win.host, nonce: win.nonce ?? 0 } : null}
                   onLog={appendNetcatLog}
+                  onOpenCheatsheet={openCheatsheet}
                 />
+              </FloatingWindow>
+            );
+          }
+          if (win.kind === 'cheatsheet') {
+            const sheet = findCheatsheet(win.sheet);
+            if (!sheet) {
+              return null;
+            }
+            return (
+              <FloatingWindow
+                key={win.id}
+                win={win}
+                active={win.z === topZ}
+                onFocus={focusWindow}
+                onClose={handleCloseWindow}
+                onMove={moveWindow}
+                onResize={resizeWindow}
+                headerExtra={<span className="fw-hint">{sheet.port}</span>}
+              >
+                <CheatsheetPanel sheet={sheet} />
               </FloatingWindow>
             );
           }

@@ -4,6 +4,8 @@ import type { FloatingWindowState, TerminalKind } from './types';
 interface OpenOptions {
   title?: string;
   host?: string;
+  /** Cheatsheet protocol id; makes cheatsheet windows singleton per sheet. */
+  sheet?: string;
   /** Singleton windows focus the existing window of the same kind. */
   singleton?: boolean;
 }
@@ -17,6 +19,7 @@ const DEFAULT_SIZES: Record<TerminalKind, { width: number; height: number }> = {
   ports: { width: 520, height: 300 },
   origin: { width: 640, height: 400 },
   netcat: { width: 640, height: 440 },
+  cheatsheet: { width: 600, height: 480 },
 };
 
 export const MIN_WINDOW_WIDTH = 280;
@@ -53,7 +56,10 @@ export function useFloatingWindows() {
     (kind: TerminalKind, options: OpenOptions = {}) => {
       const singleton = options.singleton ?? kind !== 'netcat';
       if (singleton) {
-        const existing = windowsRef.current.find((win) => win.kind === kind);
+        const existing = windowsRef.current.find(
+          (win) =>
+            win.kind === kind && (options.sheet === undefined || win.sheet === options.sheet),
+        );
         if (existing) {
           focus(existing.id);
           return;
@@ -83,6 +89,7 @@ export function useFloatingWindows() {
         z: zRef.current,
         host: options.host,
         nonce: options.host ? Date.now() : undefined,
+        sheet: options.sheet,
       };
       commit([...windowsRef.current, win]);
     },

@@ -3,8 +3,10 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { NetClose, NetConnect, NetSend } from '../../wailsjs/go/main/App';
 import { main } from '../../wailsjs/go/models';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
+import { CHEATSHEETS } from '../cheatsheets';
 import { EVENT_NET_CLOSED, EVENT_NET_DATA } from '../events';
 import type { LogLevel, NetClosedEvent, NetDataEvent, NetStatus } from '../types';
+import ContextMenu from './ContextMenu';
 
 const MAX_ENTRIES = 2000;
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -22,6 +24,7 @@ interface Entry {
 interface NetcatPanelProps {
   request: { host: string; nonce: number } | null;
   onLog: (level: LogLevel, text: string) => void;
+  onOpenCheatsheet: (sheetId: string) => void;
 }
 
 // decodeChunk turns a base64 payload from the backend into printable text,
@@ -56,7 +59,7 @@ function escapeControl(text: string): string {
   return out;
 }
 
-const NetcatPanel = ({ request, onLog }: NetcatPanelProps) => {
+const NetcatPanel = ({ request, onLog, onOpenCheatsheet }: NetcatPanelProps) => {
   const [host, setHost] = useState('');
   const [port, setPort] = useState('');
   const [tls, setTls] = useState(false);
@@ -67,7 +70,10 @@ const NetcatPanel = ({ request, onLog }: NetcatPanelProps) => {
   const [remote, setRemote] = useState('');
   const [entries, setEntries] = useState<Entry[]>([]);
   const [input, setInput] = useState('');
+  const [sheetMenuOpen, setSheetMenuOpen] = useState(false);
+  const [sheetMenuPos, setSheetMenuPos] = useState({ x: 0, y: 0 });
 
+  const sheetButtonRef = useRef<HTMLButtonElement>(null);
   const termRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
   const entryIdRef = useRef(0);
@@ -220,6 +226,14 @@ const NetcatPanel = ({ request, onLog }: NetcatPanelProps) => {
     }
   };
 
+  const openSheetMenu = () => {
+    const rect = sheetButtonRef.current?.getBoundingClientRect();
+    if (rect) {
+      setSheetMenuPos({ x: rect.left, y: rect.bottom + 6 });
+    }
+    setSheetMenuOpen(true);
+  };
+
   const onInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -286,6 +300,17 @@ const NetcatPanel = ({ request, onLog }: NetcatPanelProps) => {
           />
         )}
         <span className="netcat-spacer" />
+        <button
+          ref={sheetButtonRef}
+          type="button"
+          className={`btn netcat-sheets${sheetMenuOpen ? ' is-open' : ''}`}
+          onClick={() => (sheetMenuOpen ? setSheetMenuOpen(false) : openSheetMenu())}
+          title="Protocol command cheatsheets"
+          aria-haspopup="menu"
+          aria-expanded={sheetMenuOpen}
+        >
+          Cheatsheets <span className="btn-caret">▾</span>
+        </button>
         <span className="netcat-status" data-state={status}>
           {statusLabel}
         </span>
@@ -346,6 +371,20 @@ const NetcatPanel = ({ request, onLog }: NetcatPanelProps) => {
           Send
         </button>
       </div>
+
+      {sheetMenuOpen && (
+        <ContextMenu
+          x={sheetMenuPos.x}
+          y={sheetMenuPos.y}
+          title="CHEATSHEETS"
+          items={CHEATSHEETS.map((sheet) => ({
+            label: sheet.title,
+            hint: sheet.port,
+            onSelect: () => onOpenCheatsheet(sheet.id),
+          }))}
+          onClose={() => setSheetMenuOpen(false)}
+        />
+      )}
     </div>
   );
 };

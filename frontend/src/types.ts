@@ -204,7 +204,8 @@ export type TerminalKind =
   | 'trace'
   | 'ports'
   | 'origin'
-  | 'netcat';
+  | 'netcat'
+  | 'cheatsheet';
 
 export interface FloatingWindowState {
   id: string;
@@ -218,6 +219,8 @@ export interface FloatingWindowState {
   /** Netcat windows carry the host to connect to. */
   host?: string;
   nonce?: number;
+  /** Cheatsheet windows carry the protocol sheet id to render. */
+  sheet?: string;
 }
 
 export interface TraceState {

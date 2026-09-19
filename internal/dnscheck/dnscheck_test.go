@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"testing"
+
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 type fakeResolver struct {
@@ -303,6 +305,54 @@ func TestTargetsResolvesSOAMNAME(t *testing.T) {
 	}
 	if targets[0].Kind != "SOA" || targets[0].IP != "5.5.5.5" {
 		t.Errorf("unexpected SOA target: %+v", targets[0])
+	}
+}
+
+func TestFormatSOAPreservesRootRNAMEPosition(t *testing.T) {
+	soa := dnsmessage.SOAResource{
+		NS:      dnsmessage.MustNewName("kara.kkk.tsk.tr."),
+		MBox:    dnsmessage.MustNewName("."),
+		Serial:  2016060528,
+		Refresh: 600,
+		Retry:   300,
+		Expire:  1209600,
+		MinTTL:  3600,
+	}
+
+	got := formatSOA(soa)
+	want := "kara.kkk.tsk.tr . 2016060528 600 300 1209600 3600"
+	if got != want {
+		t.Fatalf("formatSOA = %q, want %q", got, want)
+	}
+
+	hosts := soaHosts(got)
+	if len(hosts) != 1 || hosts[0] != "kara.kkk.tsk.tr" {
+		t.Errorf("soaHosts = %v, want [kara.kkk.tsk.tr]", hosts)
+	}
+}
+
+// A root RNAME must not let the SOA serial shift into the RNAME slot and be
+// resolved as a target. See kkk.tsk.tr, whose serial 2016060528 is a valid
+// 32-bit IPv4 literal (120.42.164.112) to getaddrinfo.
+func TestTargetsSkipsRootSOARNAME(t *testing.T) {
+	resolver := fakeResolver{
+		ips: map[string][]net.IP{
+			"kara.kkk.tsk.tr": {net.ParseIP("193.110.212.150")},
+			"2016060528":      {net.ParseIP("120.42.164.112")},
+		},
+	}
+	records := []Record{{
+		Type:  "SOA",
+		Name:  "kkk.tsk.tr",
+		Value: "kara.kkk.tsk.tr . 2016060528 600 300 1209600 3600",
+	}}
+
+	targets := Targets(context.Background(), resolver, "kkk.tsk.tr", records)
+	if len(targets) != 1 {
+		t.Fatalf("got %d targets, want 1: %+v", len(targets), targets)
+	}
+	if targets[0].IP != "193.110.212.150" || targets[0].Label != "kara.kkk.tsk.tr" {
+		t.Errorf("unexpected target: %+v", targets[0])
 	}
 }
 

@@ -79,11 +79,28 @@ func (s SystemResolver) LookupSOA(ctx context.Context, domain string) (Record, b
 	if !ok {
 		return Record{}, false
 	}
-	value := fmt.Sprintf("%s %s %d %d %d %d %d",
-		strings.TrimSuffix(soa.NS.String(), "."),
-		strings.TrimSuffix(soa.MBox.String(), "."),
+	return Record{Type: "SOA", Name: domain, Value: formatSOA(soa)}, true
+}
+
+// formatSOA renders an SOA answer as a single space-delimited value
+// (MNAME RNAME SERIAL REFRESH RETRY EXPIRE MINIMUM). The root name is rendered
+// as "." rather than an empty string so every field keeps its position when the
+// value is split again; an empty field would let the serial shift into the
+// RNAME slot and be mistaken for a hostname.
+func formatSOA(soa dnsmessage.SOAResource) string {
+	return fmt.Sprintf("%s %s %d %d %d %d %d",
+		soaName(soa.NS), soaName(soa.MBox),
 		soa.Serial, soa.Refresh, soa.Retry, soa.Expire, soa.MinTTL)
-	return Record{Type: "SOA", Name: domain, Value: value}, true
+}
+
+// soaName renders a DNS name without its trailing dot, keeping the root (".") as
+// a non-empty token so it survives whitespace splitting.
+func soaName(name dnsmessage.Name) string {
+	trimmed := strings.TrimSuffix(name.String(), ".")
+	if trimmed == "" {
+		return "."
+	}
+	return trimmed
 }
 
 // serverAddress discovers the configured DNS server by observing the address

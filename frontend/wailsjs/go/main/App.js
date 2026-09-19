@@ -14,6 +14,10 @@ export function CancelDomainAnalysis() {
   return window['go']['main']['App']['CancelDomainAnalysis']();
 }
 
+export function CancelPortScan() {
+  return window['go']['main']['App']['CancelPortScan']();
+}
+
 export function CancelUnmaskTarget() {
   return window['go']['main']['App']['CancelUnmaskTarget']();
 }
@@ -40,6 +44,10 @@ export function ExportDomainReport(arg1) {
 
 export function ExportOriginReport(arg1) {
   return window['go']['main']['App']['ExportOriginReport'](arg1);
+}
+
+export function ExportPortScanReport(arg1) {
+  return window['go']['main']['App']['ExportPortScanReport'](arg1);
 }
 
 export function ListHistory() {

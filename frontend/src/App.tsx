@@ -67,6 +67,7 @@ import type {
   LogLevel,
   LogLine,
   OriginMarker,
+  PortScanTarget,
   ScanOptions,
   ScanProgressEvent,
   ScanTarget,
@@ -513,14 +514,13 @@ const App = () => {
 
   const handlePortScan = useCallback(() => {
     const trimmed = target.trim();
-    if (!trimmed) {
+    if (!trimmed && traces.length === 0) {
       setError('Enter a host to scan for ports.');
       return;
     }
     setError(null);
     setPortScan({ host: trimmed, label: trimmed });
-    openWindow('ports', { title: `PORTS · ${trimmed}` });
-  }, [openWindow, target]);
+  }, [target, traces.length]);
 
   const handleDomainAnalysis = useCallback(() => {
     if (!target.trim()) {
@@ -811,6 +811,22 @@ const App = () => {
       }
     }
     return shared;
+  }, [traces]);
+
+  // Resolved target addresses available to the port scanner's "all targets"
+  // scope, deduped by address and keeping the trace's label.
+  const portScanTargets = useMemo<PortScanTarget[]>(() => {
+    const seen = new Set<string>();
+    const out: PortScanTarget[] = [];
+    for (const trace of traces) {
+      const host = trace.targetIp || trace.ip;
+      if (!host || seen.has(host)) {
+        continue;
+      }
+      seen.add(host);
+      out.push({ label: trace.label, host });
+    }
+    return out;
   }, [traces]);
 
   useEffect(() => {
@@ -1117,7 +1133,7 @@ const App = () => {
         )}
       </div>
 
-      <div className="window-layer">
+      <div className="window-layer" id="window-layer">
         {windows.map((win) => {
           if (win.kind === 'netcat') {
             return (
@@ -1217,6 +1233,7 @@ const App = () => {
         open={portScan != null}
         host={portScan?.host ?? ''}
         label={portScan?.label}
+        targets={portScanTargets}
         onClose={() => setPortScan(null)}
         onLog={appendPortLog}
       />
@@ -1249,7 +1266,6 @@ const App = () => {
               hint: contextMenu.host,
               onSelect: () => {
                 setPortScan({ host: contextMenu.host, label: contextMenu.label });
-                openWindow('ports', { title: `PORTS · ${contextMenu.host}` });
               },
             },
             {

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,24 +123,43 @@ type CrawlLogEvent struct {
 	Message string `json:"message"`
 }
 
-// PortScanRequest starts a port scan of a host. Either Preset or PortRange
-// selects the ports; PortRange wins when both are set.
-type PortScanRequest struct {
-	Host        string `json:"host"`
-	Protocol    string `json:"protocol"`
-	Preset      string `json:"preset"`
-	PortRange   string `json:"portRange"`
-	Concurrency int    `json:"concurrency"`
-	TimeoutMs   int    `json:"timeoutMs"`
-	Probe       bool   `json:"probe"`
+// PortScanTarget identifies one host in a multi-target port scan. Label is a
+// human-friendly name (e.g. the scan target's hostname) shown beside the host.
+type PortScanTarget struct {
+	Label string `json:"label"`
+	Host  string `json:"host"`
 }
 
-// PortScanProgressEvent reports how many ports have been probed so far.
+// PortScanRequest starts a port scan. Either Preset or PortRange selects the
+// ports; PortRange wins when both are set. When Targets is non-empty each entry
+// is scanned and Host is ignored; otherwise the single Host is scanned.
+type PortScanRequest struct {
+	Host        string           `json:"host"`
+	Targets     []PortScanTarget `json:"targets"`
+	Protocol    string           `json:"protocol"`
+	Preset      string           `json:"preset"`
+	PortRange   string           `json:"portRange"`
+	Concurrency int              `json:"concurrency"`
+	TimeoutMs   int              `json:"timeoutMs"`
+	Probe       bool             `json:"probe"`
+}
+
+// PortOpenEvent reports one open port together with the target it belongs to.
+type PortOpenEvent struct {
+	Host   string          `json:"host"`
+	Label  string          `json:"label,omitempty"`
+	Result portscan.Result `json:"result"`
+}
+
+// PortScanProgressEvent reports how many ports have been probed so far for one
+// target. Target/Targets give the target's 1-based index and the total count.
 type PortScanProgressEvent struct {
-	Host  string `json:"host"`
-	Done  int    `json:"done"`
-	Total int    `json:"total"`
-	Open  int    `json:"open"`
+	Host    string `json:"host"`
+	Done    int    `json:"done"`
+	Total   int    `json:"total"`
+	Open    int    `json:"open"`
+	Target  int    `json:"target"`
+	Targets int    `json:"targets"`
 }
 
 // PortScanDoneEvent marks a port scan complete.
@@ -147,6 +167,20 @@ type PortScanDoneEvent struct {
 	Host    string `json:"host"`
 	Scanned int    `json:"scanned"`
 	Open    int    `json:"open"`
+	Targets int    `json:"targets"`
+}
+
+// PortScanRow is one open port in an exported port-scan report.
+type PortScanRow struct {
+	Host     string `json:"host"`
+	Label    string `json:"label,omitempty"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+	Service  string `json:"service,omitempty"`
+	Product  string `json:"product,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	Banner   string `json:"banner,omitempty"`
+	TLS      bool   `json:"tls,omitempty"`
 }
 
 // NetConnectRequest opens an interactive, line-oriented TCP session (netcat).
@@ -276,6 +310,7 @@ type App struct {
 	// Each independent operation family owns a canceler so a run cannot
 	// accidentally clear a newer run's cancellation handle.
 	ops       canceler
+	portOps   canceler
 	domainOps canceler
 	originOps canceler
 }
@@ -623,15 +658,19 @@ func mergeSubdomainResults(base, extra []subdomains.Result) []subdomains.Result 
 	return base
 }
 
-// ScanPorts probes a host for open ports, emitting each open port as it is
-// found. Results stream through portscan:open/portscan:progress and finish with
-// portscan:done (or portscan:error).
+// portScanHostConcurrency bounds how many targets a multi-target port scan
+// probes at once. Each target already fans out over its ports internally.
+const portScanHostConcurrency = 4
+
+// ScanPorts probes one or more targets for open ports, emitting each open port
+// as it is found. Results stream through portscan:open/portscan:progress and
+// finish with portscan:done (or portscan:error).
 func (a *App) ScanPorts(req PortScanRequest) error {
-	ctx, end := a.begin()
+	ctx, end := a.portOps.begin(a.ctx)
 	defer end()
 
-	host := strings.TrimSpace(req.Host)
-	if host == "" {
+	targets := normalizePortScanTargets(req)
+	if len(targets) == 0 {
 		message := "no host to scan"
 		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
@@ -643,34 +682,91 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 		return err
 	}
 
-	var open int64
-	_, err = a.ports.Scan(ctx, host, portscan.Options{
+	opts := portscan.Options{
 		Protocol:    req.Protocol,
 		Ports:       ports,
 		Concurrency: req.Concurrency,
 		Timeout:     time.Duration(req.TimeoutMs) * time.Millisecond,
 		Probe:       req.Probe,
 		Jitter:      portscan.DefaultJitter,
-	}, portscan.Observer{
-		OnOpen: func(result portscan.Result) {
-			atomic.AddInt64(&open, 1)
-			runtime.EventsEmit(a.ctx, EventPortOpen, result)
-		},
-		OnProgress: func(done, total, openCount int) {
-			runtime.EventsEmit(a.ctx, EventPortProgress, PortScanProgressEvent{
-				Host: host, Done: done, Total: total, Open: openCount,
-			})
-		},
-	})
+	}
 
-	if err != nil && !errors.Is(err, context.Canceled) {
-		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: err.Error()})
-		return err
+	var (
+		open    int64
+		mu      sync.Mutex
+		scanErr error
+	)
+	sem := make(chan struct{}, portScanHostConcurrency)
+	var wg sync.WaitGroup
+	for index, target := range targets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, tgt PortScanTarget) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			_, err := a.ports.Scan(ctx, tgt.Host, opts, portscan.Observer{
+				OnOpen: func(result portscan.Result) {
+					atomic.AddInt64(&open, 1)
+					runtime.EventsEmit(a.ctx, EventPortOpen, PortOpenEvent{
+						Host: tgt.Host, Label: tgt.Label, Result: result,
+					})
+				},
+				OnProgress: func(done, total, openCount int) {
+					runtime.EventsEmit(a.ctx, EventPortProgress, PortScanProgressEvent{
+						Host: tgt.Host, Done: done, Total: total, Open: openCount,
+						Target: idx + 1, Targets: len(targets),
+					})
+				},
+			})
+			if err != nil && !errors.Is(err, context.Canceled) {
+				mu.Lock()
+				if scanErr == nil {
+					scanErr = err
+				}
+				mu.Unlock()
+			}
+		}(index, target)
+	}
+	wg.Wait()
+
+	if scanErr != nil {
+		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: scanErr.Error()})
+		return scanErr
 	}
 	runtime.EventsEmit(a.ctx, EventPortDone, PortScanDoneEvent{
-		Host: host, Scanned: len(ports), Open: int(atomic.LoadInt64(&open)),
+		Host: targets[0].Host, Scanned: len(ports), Open: int(atomic.LoadInt64(&open)),
+		Targets: len(targets),
 	})
 	return nil
+}
+
+// normalizePortScanTargets resolves a request into the distinct, non-empty
+// targets to scan. When Targets is empty the single Host is used.
+func normalizePortScanTargets(req PortScanRequest) []PortScanTarget {
+	source := req.Targets
+	if len(source) == 0 {
+		source = []PortScanTarget{{Label: req.Host, Host: req.Host}}
+	}
+
+	seen := make(map[string]struct{}, len(source))
+	out := make([]PortScanTarget, 0, len(source))
+	for _, target := range source {
+		host := strings.TrimSpace(target.Host)
+		if host == "" {
+			continue
+		}
+		if _, ok := seen[host]; ok {
+			continue
+		}
+		seen[host] = struct{}{}
+		label := strings.TrimSpace(target.Label)
+		if label == "" {
+			label = host
+		}
+		out = append(out, PortScanTarget{Label: label, Host: host})
+	}
+	return out
 }
 
 // resolveScanPorts expands a request into a concrete, validated port list.
@@ -762,11 +858,17 @@ func (a *App) ExportDomainReport(report domaincheck.Report) (string, error) {
 // saveTextReport asks the user for a destination and writes content there. It
 // returns the chosen path, or "" when the dialog is cancelled.
 func (a *App) saveTextReport(title, defaultName, content string) (string, error) {
+	return a.saveReport(title, defaultName, "Text files (*.txt)", "*.txt", content)
+}
+
+// saveReport asks the user for a destination matching the supplied filter and
+// writes content there. It returns the chosen path, or "" when cancelled.
+func (a *App) saveReport(title, defaultName, displayName, pattern, content string) (string, error) {
 	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		Title:           title,
 		DefaultFilename: defaultName,
 		Filters: []runtime.FileFilter{
-			{DisplayName: "Text files (*.txt)", Pattern: "*.txt"},
+			{DisplayName: displayName, Pattern: pattern},
 			{DisplayName: "All files", Pattern: "*"},
 		},
 	})
@@ -908,9 +1010,64 @@ func (a *App) ExportOriginReport(report origin.Report) (string, error) {
 	return a.saveTextReport("Save origin discovery report", name+"-origin-report.txt", origin.FormatReport(report))
 }
 
+// ExportPortScanReport writes the supplied open ports as tab-separated text to
+// a path chosen by the user, returning the path (empty when cancelled).
+func (a *App) ExportPortScanReport(rows []PortScanRow) (string, error) {
+	return a.saveReport(
+		"Save port scan results", "portscan.tsv",
+		"Tab-separated files (*.tsv)", "*.tsv",
+		formatPortScanTSV(rows),
+	)
+}
+
+// portScanTSVHeader is the column order of an exported port-scan report.
+var portScanTSVHeader = []string{"host", "label", "port", "protocol", "service", "product", "tls", "detail"}
+
+// formatPortScanTSV renders rows as a tab-separated table with a header row.
+// Field values are stripped of tabs and newlines so they cannot break columns.
+func formatPortScanTSV(rows []PortScanRow) string {
+	var builder strings.Builder
+	builder.WriteString(strings.Join(portScanTSVHeader, "\t"))
+	builder.WriteByte('\n')
+	for _, row := range rows {
+		tls := ""
+		if row.TLS {
+			tls = "yes"
+		}
+		detail := row.Detail
+		if detail == "" {
+			detail = row.Banner
+		}
+		fields := []string{
+			sanitizeTSVField(row.Host),
+			sanitizeTSVField(row.Label),
+			strconv.Itoa(row.Port),
+			sanitizeTSVField(row.Protocol),
+			sanitizeTSVField(row.Service),
+			sanitizeTSVField(row.Product),
+			tls,
+			sanitizeTSVField(detail),
+		}
+		builder.WriteString(strings.Join(fields, "\t"))
+		builder.WriteByte('\n')
+	}
+	return builder.String()
+}
+
+// sanitizeTSVField collapses tabs and newlines so a value stays in one cell.
+func sanitizeTSVField(value string) string {
+	return strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(strings.TrimSpace(value))
+}
+
 // Cancel stops the running trace or scan, if any.
 func (a *App) Cancel() {
 	a.ops.stop()
+}
+
+// CancelPortScan stops a running port scan, if any. Port scans use their own
+// cancellation context so they neither stop nor are stopped by traces/scans.
+func (a *App) CancelPortScan() {
+	a.portOps.stop()
 }
 
 // SaveHistory stores the supplied snapshot of the current traces and returns

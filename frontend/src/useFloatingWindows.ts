@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { nextZ } from './zorder';
 import type { FloatingWindowState, TerminalKind } from './types';
 
 interface OpenOptions {
@@ -35,7 +36,6 @@ let sequence = 0;
 export function useFloatingWindows() {
   const [windows, setWindows] = useState<FloatingWindowState[]>([]);
   const windowsRef = useRef<FloatingWindowState[]>([]);
-  const zRef = useRef(1200);
   const cascadeRef = useRef(0);
 
   const commit = useCallback((next: FloatingWindowState[]) => {
@@ -45,8 +45,7 @@ export function useFloatingWindows() {
 
   const focus = useCallback(
     (id: string) => {
-      zRef.current += 1;
-      const z = zRef.current;
+      const z = nextZ();
       commit(windowsRef.current.map((win) => (win.id === id ? { ...win, z } : win)));
     },
     [commit],
@@ -76,7 +75,6 @@ export function useFloatingWindows() {
       const offsetY = (step % 3) * 48;
       const x = Math.max(8, Math.min(window.innerWidth - width - 16, 90 + offsetX));
       const y = Math.max(8, Math.min(window.innerHeight - height - 16, 68 + offsetY));
-      zRef.current += 1;
 
       const win: FloatingWindowState = {
         id: `${kind}-${sequence}`,
@@ -86,7 +84,7 @@ export function useFloatingWindows() {
         y,
         width,
         height,
-        z: zRef.current,
+        z: nextZ(),
         host: options.host,
         nonce: options.host ? Date.now() : undefined,
         sheet: options.sheet,

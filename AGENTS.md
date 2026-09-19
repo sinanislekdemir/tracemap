@@ -138,9 +138,15 @@ PLAN.md                     design/architecture document
   before HTTP because an HTTP server answers a TLS ClientHello with a misleading
   plaintext `400`.
   Events: `portscan:open`, `portscan:progress`, `portscan:done`,
-  `portscan:error`; results are not persisted. `ScanPorts` uses the shared
-  `App.begin()` cancel model, so it cancels (and is cancelled by) other
-  operations.
+  `portscan:error`; results are not persisted. `ScanPorts` owns a dedicated
+  canceler (`portOps`), so it neither stops nor is stopped by traces/scans;
+  `CancelPortScan` stops it. A request may carry multiple `Targets`
+  (`PortScanTarget`); each is
+  scanned with bounded host concurrency (`portScanHostConcurrency`), `portscan:open`
+  carries the owning host/label in a `PortOpenEvent`, and the progress/done
+  events report the target index/count. `App.ExportPortScanReport` writes the
+  collected open ports as tab-separated text via the native save dialog
+  (`formatPortScanTSV`, `.tsv` filter).
 - **Domain analysis** (`internal/domaincheck`): builds a security/reliability
   report for a domain. Registration comes from RDAP via the IANA bootstrap
   (`data.iana.org/rdap/dns.json`, cached in memory), falling back to classic
@@ -231,7 +237,17 @@ PLAN.md                     design/architecture document
   slow discovery does not hide the pending steps), and netcat sessions each get
   a window. Log lines are stored per channel in
   `App.tsx` (`logChannels`), capped per channel. Scan windows are closed at the
-  start of a new operation; console/ports/netcat windows persist.
+  start of a new operation; console/netcat windows persist.
+- **Tool dialogs are floating windows, not blocking modals.** The shared `Modal`
+  shell (used by `ScanModal`, `PortScanModal`, `DomainAnalysisModal`,
+  `OriginModal`, `HistoryModal`) renders with `modal--float`: no backdrop,
+  `position: fixed`, draggable via its header and resizable via the bottom-right
+  `.fw-resize` handle. It portals into the `#window-layer` and draws its
+  z-order from `zorder.ts`, the same counter `useFloatingWindows` uses, so
+  focusing a dialog or a terminal window raises it above the other. The map and
+  terminal windows stay visible and interactive behind it. `PortScanModal` is
+  the port scanner's terminal (inline LIVE LOG); it no longer opens a separate
+  floating `ports` channel window. `MissingToolModal` stays a blocking alert.
 - **react-leaflet gotcha:** `className` must be a **top-level prop** on
   `CircleMarker`/`Polyline`. Putting it in `pathOptions` routes it through
   `setStyle()`, which silently drops it. Colours go in `pathOptions`; animations
@@ -249,10 +265,17 @@ PLAN.md                     design/architecture document
 - **Port scan entry points**: the toolbar **Ports** item opens `PortScanModal`
   for the current target. The right-click context menu (`ContextMenu.tsx`, a
   generic cursor menu raised by `HopList`, `TraceList` and the map markers)
-  offers **Find open ports** for a specific IP. The modal goes options → live
-  results, owns its own `portscan:*` subscriptions, and streams results in
-  place. Do not add a `window` `contextmenu` listener to close the menu — it can
-  fire for the same event that opened it; `pointerdown`/`blur`/`Escape` suffice.
+  offers **Find open ports** for a specific IP. When more than one resolved scan
+  target exists, the modal offers a **TARGETS** scope toggle — *This host* or
+  *All targets (N)* — and an **Export TSV** footer button (calls
+  `ExportPortScanReport`) that dumps the open ports as a host/port table. The
+  modal goes options → live
+  results, owns its own `portscan:*` subscriptions, and streams open ports into
+  an inline LIVE LOG terminal (`ConsoleBody`, capped at 2000 lines) rather than
+  a table, since a scan can find many ports. It cancels through `CancelPortScan`
+  (independent of traces). Do not add a `window` `contextmenu` listener to close
+  the menu — it can fire for the same event that opened it;
+  `pointerdown`/`blur`/`Escape` suffice.
 - **Domain analysis**: `DomainAnalysisModal` runs `AnalyzeDomain`, listens to
   `domain:progress`, and renders the checklist/details; **Export** calls
   `ExportDomainReport`. It uses its own cancellation (independent of traces).

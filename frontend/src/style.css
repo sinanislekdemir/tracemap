@@ -1488,6 +1488,24 @@ body {
   overflow: hidden;
 }
 
+/* Floating tool dialogs: draggable, resizable windows with no backdrop, so
+   they never block the map or the terminal windows behind them. */
+.modal--float {
+  position: fixed;
+  width: auto;
+  max-height: none;
+  pointer-events: auto;
+  animation: fw-in 0.12s ease both;
+}
+.modal--float .modal-head {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.modal--float .modal-head:active {
+  cursor: grabbing;
+}
+
 .modal-head {
   display: flex;
   align-items: flex-start;
@@ -2605,6 +2623,14 @@ body {
   display: flex;
   flex-direction: column;
   height: 190px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.port-log {
+  display: flex;
+  flex-direction: column;
+  height: 320px;
   border: 1px solid var(--border);
   border-radius: 7px;
   overflow: hidden;

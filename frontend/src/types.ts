@@ -149,17 +149,46 @@ export interface PortResult {
   tls?: boolean;
 }
 
+/** One host in a multi-target port scan. */
+export interface PortScanTarget {
+  label: string;
+  host: string;
+}
+
+/** An open port tagged with the target it was found on. */
+export interface PortOpenEvent {
+  host: string;
+  label?: string;
+  result: PortResult;
+}
+
+/** One open port as exported to a tab-separated report. */
+export interface PortScanRow {
+  host: string;
+  label?: string;
+  port: number;
+  protocol: string;
+  service?: string;
+  product?: string;
+  detail?: string;
+  banner?: string;
+  tls?: boolean;
+}
+
 export interface PortScanProgress {
   host: string;
   done: number;
   total: number;
   open: number;
+  target: number;
+  targets: number;
 }
 
 export interface PortScanDone {
   host: string;
   scanned: number;
   open: number;
+  targets: number;
 }
 
 export interface PortScanOptions {
@@ -169,6 +198,7 @@ export interface PortScanOptions {
   concurrency: number;
   timeoutMs: number;
   probe: boolean;
+  scope: 'single' | 'all';
 }
 
 export interface NetDataEvent {

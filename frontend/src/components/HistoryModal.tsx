@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import Modal from './Modal';
 import type { HistorySummary } from '../types';
 
 interface HistoryModalProps {
@@ -81,83 +82,13 @@ const HistoryModal = ({
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Trace history"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-head">
-          <div>
-            <div className="modal-title">HISTORY</div>
-            <div className="modal-sub">
-              {entries.length} saved {entries.length === 1 ? 'entry' : 'entries'}
-            </div>
-          </div>
-          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
-        </div>
-
-        <div className="modal-body">
-          {disabled && <div className="modal-note">History storage is disabled.</div>}
-          {!disabled && loading && <div className="modal-note">Loading…</div>}
-          {!disabled && !loading && entries.length === 0 && (
-            <div className="modal-note">
-              No saved traces yet. Run a trace or scan, then choose “Add to history”.
-            </div>
-          )}
-
-          {entries.length > 0 && (
-            <>
-              <div className="history-head">
-                <button type="button" className="history-toggle" onClick={toggleAll}>
-                  {allSelected ? 'Clear selection' : 'Select all'}
-                </button>
-                <button type="button" className="history-toggle history-toggle--danger" onClick={onClear}>
-                  Clear all
-                </button>
-              </div>
-              <ul className="history-list">
-                {entries.map((entry) => (
-                  <li key={entry.id} className={`history-row${selected.has(entry.id) ? ' is-selected' : ''}`}>
-                    <label className="history-check">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(entry.id)}
-                        onChange={() => toggle(entry.id)}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="history-main"
-                      onClick={() => toggle(entry.id)}
-                    >
-                      <span className={`history-kind history-kind--${entry.kind}`}>{entry.kind}</span>
-                      <span className="history-label selectable">{entry.label}</span>
-                      <span className="history-meta">
-                        {entry.traceCount} {entry.traceCount === 1 ? 'path' : 'paths'} · {entry.hopCount} hops
-                      </span>
-                      <span className="history-date">{formatDate(entry.createdAt)}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="history-delete"
-                      title="Delete entry"
-                      onClick={() => onDelete(entry.id)}
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-
-        <div className="modal-foot">
+    <Modal
+      title="HISTORY"
+      subtitle={`${entries.length} saved ${entries.length === 1 ? 'entry' : 'entries'}`}
+      ariaLabel="Trace history"
+      onClose={onClose}
+      footer={
+        <>
           <button type="button" className="btn" onClick={onClose}>
             Cancel
           </button>
@@ -169,9 +100,63 @@ const HistoryModal = ({
           >
             Show {selected.size > 0 ? `${selected.size} ` : ''}on map
           </button>
+        </>
+      }
+    >
+      {disabled && <div className="modal-note">History storage is disabled.</div>}
+      {!disabled && loading && <div className="modal-note">Loading…</div>}
+      {!disabled && !loading && entries.length === 0 && (
+        <div className="modal-note">
+          No saved traces yet. Run a trace or scan, then choose “Add to history”.
         </div>
-      </div>
-    </div>
+      )}
+
+      {entries.length > 0 && (
+        <>
+          <div className="history-head">
+            <button type="button" className="history-toggle" onClick={toggleAll}>
+              {allSelected ? 'Clear selection' : 'Select all'}
+            </button>
+            <button type="button" className="history-toggle history-toggle--danger" onClick={onClear}>
+              Clear all
+            </button>
+          </div>
+          <ul className="history-list">
+            {entries.map((entry) => (
+              <li key={entry.id} className={`history-row${selected.has(entry.id) ? ' is-selected' : ''}`}>
+                <label className="history-check">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(entry.id)}
+                    onChange={() => toggle(entry.id)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="history-main"
+                  onClick={() => toggle(entry.id)}
+                >
+                  <span className={`history-kind history-kind--${entry.kind}`}>{entry.kind}</span>
+                  <span className="history-label selectable">{entry.label}</span>
+                  <span className="history-meta">
+                    {entry.traceCount} {entry.traceCount === 1 ? 'path' : 'paths'} · {entry.hopCount} hops
+                  </span>
+                  <span className="history-date">{formatDate(entry.createdAt)}</span>
+                </button>
+                <button
+                  type="button"
+                  className="history-delete"
+                  title="Delete entry"
+                  onClick={() => onDelete(entry.id)}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </Modal>
   );
 };
 

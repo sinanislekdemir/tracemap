@@ -11,6 +11,8 @@ export function Cancel():Promise<void>;
 
 export function CancelDomainAnalysis():Promise<void>;
 
+export function CancelPortScan():Promise<void>;
+
 export function CancelUnmaskTarget():Promise<void>;
 
 export function CheckTools():Promise<main.ToolStatus>;
@@ -24,6 +26,8 @@ export function DeleteHistory(arg1:number):Promise<void>;
 export function ExportDomainReport(arg1:domaincheck.Report):Promise<string>;
 
 export function ExportOriginReport(arg1:origin.Report):Promise<string>;
+
+export function ExportPortScanReport(arg1:Array<main.PortScanRow>):Promise<string>;
 
 export function ListHistory():Promise<Array<history.Summary>>;
 

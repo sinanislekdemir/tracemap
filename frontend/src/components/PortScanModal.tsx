@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Cancel, ScanPorts } from '../../wailsjs/go/main/App';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CancelPortScan, ExportPortScanReport, ScanPorts } from '../../wailsjs/go/main/App';
 import { main } from '../../wailsjs/go/models';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
+import ConsoleBody from './ConsoleBody';
 import Modal from './Modal';
 import { useEscape } from '../useEscape';
 import {
@@ -12,13 +13,17 @@ import {
 } from '../events';
 import type {
   LogLevel,
-  PortResult,
+  LogLine,
+  PortOpenEvent,
   PortScanDone,
   PortScanOptions,
   PortScanProgress,
+  PortScanTarget,
 } from '../types';
 
 type Phase = 'options' | 'scanning' | 'done';
+
+const MAX_MODAL_LOG_LINES = 2000;
 
 const PRESETS: { id: PortScanOptions['preset']; label: string; hint: string }[] = [
   { id: 'top20', label: 'Top 20', hint: 'Most commonly open ports' },
@@ -33,6 +38,7 @@ const DEFAULT_OPTIONS: PortScanOptions = {
   concurrency: 64,
   timeoutMs: 500,
   probe: true,
+  scope: 'single',
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -88,21 +94,59 @@ function countPorts(spec: string): number {
   return seen.size;
 }
 
+// describePort renders one open port as a terminal line.
+function describePort(entry: PortOpenEvent, showHost: boolean): string {
+  const result = entry.result;
+  const parts = [`${result.port}/${result.protocol}`, 'open'];
+  const name = result.product || result.service;
+  if (name) {
+    parts.push(name);
+  }
+  if (result.tls) {
+    parts.push('TLS');
+  }
+  const extra = result.detail || result.banner;
+  if (extra) {
+    parts.push(extra);
+  }
+  const prefix = showHost ? `${entry.label || entry.host} · ` : '';
+  return `${prefix}${parts.join(' · ')}`;
+}
+
 interface PortScanModalProps {
   open: boolean;
   host: string;
   label?: string;
+  /** Resolved scan targets available for the "all targets" scope. */
+  targets: PortScanTarget[];
   onClose: () => void;
   onLog: (level: LogLevel, text: string) => void;
 }
 
-const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps) => {
+const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanModalProps) => {
   const [options, setOptions] = useState<PortScanOptions>(DEFAULT_OPTIONS);
   const [phase, setPhase] = useState<Phase>('options');
-  const [results, setResults] = useState<PortResult[]>([]);
+  const [results, setResults] = useState<PortOpenEvent[]>([]);
   const [progress, setProgress] = useState<PortScanProgress | null>(null);
   const [done, setDone] = useState<PortScanDone | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [logs, setLogs] = useState<LogLine[]>([]);
+  const logIdRef = useRef(0);
+
+  // pushLog mirrors a line into the modal's inline terminal and the shared
+  // ports log channel.
+  const pushLog = useCallback(
+    (level: LogLevel, text: string) => {
+      logIdRef.current += 1;
+      const line: LogLine = { id: logIdRef.current, time: Date.now(), level, text, channel: 'ports' };
+      setLogs((previous) => {
+        const next = [...previous, line];
+        return next.length > MAX_MODAL_LOG_LINES ? next.slice(next.length - MAX_MODAL_LOG_LINES) : next;
+      });
+      onLog(level, text);
+    },
+    [onLog],
+  );
 
   useEffect(() => {
     if (!open) {
@@ -113,16 +157,25 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
     setProgress(null);
     setDone(null);
     setError(null);
+    setLogs([]);
+    setOptions((previous) => ({ ...previous, scope: 'single' }));
   }, [open, host]);
+
+  // The "all targets" scope is meaningless with fewer than two targets.
+  useEffect(() => {
+    if (targets.length <= 1) {
+      setOptions((previous) => (previous.scope === 'single' ? previous : { ...previous, scope: 'single' }));
+    }
+  }, [targets.length]);
 
   useEffect(() => {
     if (!open) {
       return;
     }
-    const offOpen = EventsOn(EVENT_PORT_OPEN, (event: PortResult) => {
+    const showHost = targets.length > 1;
+    const offOpen = EventsOn(EVENT_PORT_OPEN, (event: PortOpenEvent) => {
       setResults((previous) => [...previous, event]);
-      const name = event.product || event.service || 'unknown';
-      onLog('ok', `port ${event.protocol}/${event.port} open · ${name}`);
+      pushLog('ok', describePort(event, showHost));
     });
     const offProgress = EventsOn(EVENT_PORT_PROGRESS, (event: PortScanProgress) => {
       setProgress(event);
@@ -131,13 +184,14 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
       setDone(event);
       setProgress(null);
       setPhase('done');
-      onLog('ok', `portscan ${event.host} · ${event.open} open / ${event.scanned} scanned`);
+      const scope = event.targets > 1 ? `${event.targets} targets · ` : '';
+      pushLog('ok', `portscan complete · ${scope}${event.open} open / ${event.scanned} ports each`);
     });
     const offError = EventsOn(EVENT_PORT_ERROR, (event: { message: string }) => {
       setError(event.message);
       setProgress(null);
       setPhase('done');
-      onLog('error', `portscan error: ${event.message}`);
+      pushLog('error', `portscan error: ${event.message}`);
     });
     return () => {
       offOpen();
@@ -145,14 +199,15 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
       offDone();
       offError();
     };
-  }, [open, onLog]);
+  }, [open, pushLog, targets.length]);
 
   const rangeError = options.preset === 'custom' ? validateRange(options.portRange) : null;
-  const canStart = options.preset !== 'custom' || rangeError === null;
+  const canScanAll = targets.length > 1 && options.scope === 'all';
+  const canStart = (options.preset !== 'custom' || rangeError === null) && (canScanAll || Boolean(host));
 
   const handleClose = () => {
     if (phase === 'scanning') {
-      Cancel();
+      void CancelPortScan();
     }
     onClose();
   };
@@ -160,7 +215,10 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
   useEscape(open, handleClose);
 
   const sortedResults = useMemo(
-    () => [...results].sort((a, b) => a.port - b.port),
+    () =>
+      [...results].sort((a, b) =>
+        a.host === b.host ? a.result.port - b.result.port : a.host.localeCompare(b.host),
+      ),
     [results],
   );
 
@@ -168,24 +226,32 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
     return null;
   }
 
+  const multi = options.scope === 'all' && targets.length > 1;
+
   const portSummary =
     options.preset === 'custom'
       ? `${options.portRange} · ${countPorts(options.portRange)} ports`
       : PRESETS.find((preset) => preset.id === options.preset)?.label ?? options.preset;
 
   const start = () => {
-    if (!host || !canStart) {
+    if (!canStart) {
       return;
     }
+    const scanAll = canScanAll;
     setResults([]);
     setProgress(null);
     setDone(null);
     setError(null);
+    setLogs([]);
     setPhase('scanning');
-    onLog('info', `▶ portscan ${host} · ${options.protocol} · ${portSummary}`);
+    const scope = scanAll ? `${targets.length} targets` : host;
+    pushLog('info', `▶ portscan ${scope} · ${options.protocol} · ${portSummary}`);
     ScanPorts(
       main.PortScanRequest.createFrom({
-        host,
+        host: scanAll ? '' : host,
+        targets: scanAll
+          ? targets.map((target) => main.PortScanTarget.createFrom({ label: target.label, host: target.host }))
+          : [],
         protocol: options.protocol,
         preset: options.preset === 'custom' ? '' : options.preset,
         portRange: options.preset === 'custom' ? options.portRange : '',
@@ -196,6 +262,35 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
     ).catch(() => {
       // Failures arrive through the portscan:error event.
     });
+  };
+
+  const handleExport = () => {
+    if (sortedResults.length === 0) {
+      return;
+    }
+    const rows = sortedResults.map((entry) =>
+      main.PortScanRow.createFrom({
+        host: entry.host,
+        label: entry.label ?? '',
+        port: entry.result.port,
+        protocol: entry.result.protocol,
+        service: entry.result.service ?? '',
+        product: entry.result.product ?? '',
+        detail: entry.result.detail ?? '',
+        banner: entry.result.banner ?? '',
+        tls: entry.result.tls ?? false,
+      }),
+    );
+    ExportPortScanReport(rows)
+      .then((path) => {
+        if (path) {
+          pushLog('ok', `port scan saved to ${path}`);
+        }
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        pushLog('error', `export failed: ${message}`);
+      });
   };
 
   const percent = progress && progress.total > 0 ? (progress.done / progress.total) * 100 : 0;
@@ -225,7 +320,7 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
             </>
           )}
           {phase === 'scanning' && (
-            <button type="button" className="btn" onClick={() => Cancel()}>
+            <button type="button" className="btn" onClick={() => void CancelPortScan()}>
               Stop
             </button>
           )}
@@ -233,6 +328,14 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
             <>
               <button type="button" className="btn" onClick={handleClose}>
                 Close
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={sortedResults.length === 0}
+                onClick={handleExport}
+              >
+                Export TSV
               </button>
               <button type="button" className="btn btn--primary" disabled={!canStart} onClick={start}>
                 Rescan
@@ -244,6 +347,33 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
     >
           {phase === 'options' ? (
             <>
+              {targets.length > 1 && (
+                <div className="scan-group">
+                  <div className="scan-group-title">TARGETS</div>
+                  <div className="port-toggle">
+                    <button
+                      type="button"
+                      className={`port-toggle-btn${options.scope === 'single' ? ' is-active' : ''}`}
+                      onClick={() => setOptions((previous) => ({ ...previous, scope: 'single' }))}
+                    >
+                      This host
+                    </button>
+                    <button
+                      type="button"
+                      className={`port-toggle-btn${options.scope === 'all' ? ' is-active' : ''}`}
+                      onClick={() => setOptions((previous) => ({ ...previous, scope: 'all' }))}
+                    >
+                      All targets ({targets.length})
+                    </button>
+                  </div>
+                  <div className="port-note">
+                    {options.scope === 'all'
+                      ? `Scans every resolved target (${targets.length}) and streams the open ports below.`
+                      : host}
+                  </div>
+                </div>
+              )}
+
               <div className="scan-group">
                 <div className="scan-group-title">PORTS</div>
                 <label className="scan-option">
@@ -400,7 +530,11 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
               {phase === 'scanning' && (
                 <div className="port-progress">
                   <div className="port-progress-head">
-                    <span>{progress ? `${progress.done}/${progress.total}` : 'starting…'}</span>
+                    <span>
+                      {progress
+                        ? `${multi ? `target ${progress.target}/${progress.targets} · ` : ''}${progress.done}/${progress.total}`
+                        : 'starting…'}
+                    </span>
                     <span>{progress?.open ?? results.length} open</span>
                   </div>
                   <div className="port-progress-bar">
@@ -414,36 +548,17 @@ const PortScanModal = ({ open, host, label, onClose, onLog }: PortScanModalProps
               {phase === 'done' && !error && (
                 <div className="port-summary">
                   <b>{results.length}</b> open
-                  {done ? ` · ${done.scanned} scanned` : ''}
+                  {done ? ` · ${done.scanned} scanned${done.targets > 1 ? ' each' : ''}` : ''}
+                  {multi || (done?.targets ?? 1) > 1 ? ` · ${done?.targets ?? targets.length} targets` : ''}
                 </div>
               )}
 
-              {sortedResults.length === 0 ? (
-                <div className="modal-note">{phase === 'scanning' ? 'Scanning…' : 'No open ports found.'}</div>
-              ) : (
-                <div className="port-table">
-                  <div className="port-row port-row--head">
-                    <span>PORT</span>
-                    <span>PROTO</span>
-                    <span>SERVICE</span>
-                    <span>IDENTIFIED</span>
-                  </div>
-                  {sortedResults.map((result) => (
-                    <div className="port-row" key={`${result.protocol}-${result.port}`}>
-                      <span className="port-num selectable">{result.port}</span>
-                      <span className="port-proto">{result.protocol}</span>
-                      <span className="port-service">{result.service || '—'}</span>
-                      <span className="port-ident">
-                        {result.tls && <span className="port-tag">TLS</span>}
-                        <span className="port-product selectable">{result.product || '—'}</span>
-                        {(result.detail || result.banner) && (
-                          <span className="port-banner selectable">{result.detail || result.banner}</span>
-                        )}
-                      </span>
-                    </div>
-                  ))}
+              <div className="domain-group">
+                <div className="domain-group-title">LIVE LOG · {logs.length}</div>
+                <div className="port-log">
+                  <ConsoleBody lines={logs} />
                 </div>
-              )}
+              </div>
             </>
           )}
     </Modal>

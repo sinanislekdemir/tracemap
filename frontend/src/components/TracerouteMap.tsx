@@ -29,6 +29,7 @@ interface TracerouteMapProps {
   onContextMenu?: (host: string, label: string, x: number, y: number) => void;
   sharedHops?: Map<string, number>;
   origins?: OriginMarker[];
+  theme: 'dark' | 'light';
 }
 
 const DEFAULT_CENTER: LatLngExpression = [25, 10];
@@ -41,11 +42,11 @@ const LABEL_ZOOM = 3;
 const ALL_LABELS_ZOOM = 5;
 const MAJOR_POP = 2_000_000;
 
-const COUNTRY_STYLE = {
-  color: '#22384a',
-  weight: 0.6,
-  fillColor: '#0e1822',
-  fillOpacity: 1,
+// Leaflet draws the vector basemap with inline SVG attributes, so the colours
+// cannot come from CSS variables; keep a small palette per theme instead.
+const MAP_COLORS = {
+  dark: { border: '#22384a', fill: '#0e1822', dot: '#7d9bb0', hopFill: '#0a2833' },
+  light: { border: '#c2cfdc', fill: '#e8eef4', dot: '#8fa6b8', hopFill: '#d8e4ee' },
 };
 
 // originIcon marks a confirmed/likely origin discovered by "Unmask target".
@@ -115,7 +116,7 @@ function locate(hops: HopData[]): Located[] {
 }
 
 /** Major-world-city reference dots; names appear only when zoomed in. */
-function CityLayer() {
+function CityLayer({ dotColor }: { dotColor: string }) {
   const map = useMap();
   const [zoom, setZoom] = useState(map.getZoom());
 
@@ -141,7 +142,7 @@ function CityLayer() {
             radius={showAll ? 2 : 1.6}
             interactive={false}
             className="city-dot"
-            pathOptions={{ color: '#7d9bb0', fillColor: '#7d9bb0', fillOpacity: 0.7, weight: 0 }}
+            pathOptions={{ color: dotColor, fillColor: dotColor, fillOpacity: 0.7, weight: 0 }}
           >
             {label ? (
               <Tooltip permanent direction="right" offset={[3, 0]} className="city-label">
@@ -189,7 +190,15 @@ const TracerouteMap = ({
   onContextMenu,
   sharedHops,
   origins,
+  theme,
 }: TracerouteMapProps) => {
+  const mapColors = MAP_COLORS[theme];
+  const countryStyle = {
+    color: mapColors.border,
+    weight: 0.6,
+    fillColor: mapColors.fill,
+    fillOpacity: 1,
+  };
   const [legendOpen, setLegendOpen] = useState(true);
   const visible = selectedTraces.size === 0 ? traces : traces.filter((trace) => selectedTraces.has(trace.id));
 
@@ -220,12 +229,13 @@ const TracerouteMap = ({
           attributionControl
         >
           <GeoJSON
+            key={`countries:${theme}`}
             data={countries}
             interactive={false}
             attribution="Natural Earth"
-            style={COUNTRY_STYLE}
+            style={countryStyle}
           />
-          <CityLayer />
+          <CityLayer key={`cities:${theme}`} dotColor={mapColors.dot} />
           <ScaleControl position="bottomleft" imperial={false} />
 
           {rendered.map(({ trace, located, route }) => {
@@ -274,7 +284,7 @@ const TracerouteMap = ({
                       className={dotClasses.join(' ')}
                       pathOptions={{
                         color: trace.color,
-                        fillColor: isDest || isOrigin ? trace.color : '#0a2833',
+                        fillColor: isDest || isOrigin ? trace.color : mapColors.hopFill,
                         fillOpacity: isDest ? 0.95 : isOrigin ? 0.9 : 0.8,
                         opacity: 1,
                         weight: shared ? 3 : 2,

@@ -38,6 +38,8 @@ import TraceList from './components/TraceList';
 import TracerouteMap from './components/TracerouteMap';
 import { useFloatingWindows } from './useFloatingWindows';
 import { useSplitter } from './useSplitter';
+import { applyTheme, loadTheme } from './theme';
+import type { Theme } from './theme';
 import { findCheatsheet } from './cheatsheets';
 import { TRACE_COLORS } from './colors';
 import { buildDisplayHops, isLocated } from './traces';
@@ -102,6 +104,7 @@ const SCAN_PHASE_LABELS: Record<string, string> = {
 };
 
 const App = () => {
+  const [theme, setTheme] = useState<Theme>(loadTheme);
   const [target, setTarget] = useState('example.com');
   const [maxHops, setMaxHops] = useState(30);
   const [isLoading, setIsLoading] = useState(false);
@@ -247,6 +250,14 @@ const App = () => {
     },
     [],
   );
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
+  }, []);
 
   useEffect(() => {
     CheckTools()
@@ -1116,6 +1127,7 @@ const App = () => {
           onContextMenu={(host, label, x, y) => openContextMenu(x, y, host, label)}
           sharedHops={sharedHops}
           origins={originMarkers}
+          theme={theme}
         />
 
         {hasDiscovery && (
@@ -1260,6 +1272,8 @@ const App = () => {
         hops={totals.hops}
         located={totals.located}
         elapsedMs={elapsedMs}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
       <HistoryModal

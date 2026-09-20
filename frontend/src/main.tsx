@@ -5,6 +5,9 @@ import './style.css';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
 import GlobalErrorBridge from './components/GlobalErrorBridge';
+import { applyTheme, loadTheme } from './theme';
+
+applyTheme(loadTheme());
 
 const container = document.getElementById('root');
 if (!container) {

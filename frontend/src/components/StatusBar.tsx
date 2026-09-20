@@ -8,6 +8,8 @@ interface StatusBarProps {
   hops: number;
   located: number;
   elapsedMs: number;
+  theme: 'dark' | 'light';
+  onToggleTheme: () => void;
 }
 
 function formatElapsed(ms: number): string {
@@ -29,7 +31,7 @@ const LABELS: Record<StatusBarProps['state'], string> = {
   error: 'ERROR',
 };
 
-const StatusBar = ({ state, message, progress, targets, hops, located, elapsedMs }: StatusBarProps) => {
+const StatusBar = ({ state, message, progress, targets, hops, located, elapsedMs, theme, onToggleTheme }: StatusBarProps) => {
   const done = progress?.done ?? 0;
   const total = progress?.total ?? 0;
   const showProgress = total > 0;
@@ -68,6 +70,18 @@ const StatusBar = ({ state, message, progress, targets, hops, located, elapsedMs
         <span className="stat">
           TIME <b>{formatElapsed(elapsedMs)}</b>
         </span>
+        <button
+          type="button"
+          className="theme-toggle"
+          onClick={onToggleTheme}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+        >
+          <span className="theme-toggle-track" data-theme={theme}>
+            <i />
+          </span>
+          {theme === 'dark' ? 'DARK' : 'LIGHT'}
+        </button>
       </div>
     </footer>
   );

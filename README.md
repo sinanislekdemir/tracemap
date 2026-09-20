@@ -15,15 +15,11 @@ Built with [Wails v2](https://wails.io) — a Go backend bound directly to a
 React + TypeScript frontend, packaged as a single native binary.
 
 ## Screenshots
-<img width="1308" height="912" alt="Screenshot_20260919_171214" src="https://github.com/user-attachments/assets/4f30ae4c-49fe-44e9-97dd-0a73de5b8a4b" />
-<img width="1308" height="912" alt="Screenshot_20260919_171225" src="https://github.com/user-attachments/assets/3fcf9bae-0e03-49d0-a987-604250626334" />
-<img width="1308" height="912" alt="Screenshot_20260919_171350" src="https://github.com/user-attachments/assets/da4daa64-826d-42ac-b065-8408a3af7965" />
-<img width="1308" height="912" alt="Screenshot_20260919_171405" src="https://github.com/user-attachments/assets/f2c53061-e140-444c-affe-8934a2801ae6" />
-<img width="1308" height="912" alt="Screenshot_20260919_171422" src="https://github.com/user-attachments/assets/bcaae9f1-307f-4a79-a67c-45cb189fb572" />
-<img width="1308" height="912" alt="Screenshot_20260919_171533" src="https://github.com/user-attachments/assets/a45fbad0-11d6-4827-9988-f4da2931031d" />
-<img width="1308" height="912" alt="Screenshot_20260919_171543" src="https://github.com/user-attachments/assets/177a94d9-6de7-4bff-b710-07696b1ad222" />
-<img width="1308" height="912" alt="Screenshot_20260919_171624" src="https://github.com/user-attachments/assets/6a7c8583-6f62-4b36-a031-495ee513d46f" />
+I keep changing the UI, therefore I can't put screenshots for every feature.
+This shall give you an impresssion:
 
+<img width="1661" height="994" alt="Screenshot_20260920_142015" src="https://github.com/user-attachments/assets/a64658d4-770e-496c-bd27-a44885a5317c" />
+<img width="1661" height="994" alt="Screenshot_20260920_141953" src="https://github.com/user-attachments/assets/1d659505-fccc-4c46-8209-c41a0ae89285" />
 
 
 *Loading several saved traces at once; hops shared by two or more paths are

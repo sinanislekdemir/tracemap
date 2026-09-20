@@ -57,7 +57,9 @@ highlighted as correlation points.*
   and jitter to reduce the scan signature. Open ports are optionally identified
   by banner grab, HTTP request and TLS handshake on TCP (server, certificate and
   ALPN), and by reply shape or printable banner on UDP (DNS, mDNS and NTP are
-  labelled).
+  labelled). Open ports stream into a filterable, sortable table grouped per
+  host, and **Export report** writes a verbose text report of the scan context
+  and every open port.
 - **Domain analysis** — the **Tools ▾ → Domain analysis** report grades a domain
   on security and reliability. Registration data comes from RDAP via the IANA
   bootstrap, falling back to classic WHOIS (asking IANA for the registry server).

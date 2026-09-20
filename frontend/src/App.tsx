@@ -370,7 +370,12 @@ const App = () => {
       appendLog('ok', 'scan complete', 'console');
     });
     EventsOn(EVENT_SUBDOMAINS, (event: SubdomainResult[]) => {
-      const list = Array.isArray(event) ? event : [];
+      // The backend can emit a subdomain with no addresses (nil slice -> null);
+      // normalise so downstream code can always treat ips as an array.
+      const list = (Array.isArray(event) ? event : []).map((sub) => ({
+        ...sub,
+        ips: Array.isArray(sub.ips) ? sub.ips : [],
+      }));
       setSubdomains(list);
       setSelectedSubs(new Set());
       openStep('subdomains');

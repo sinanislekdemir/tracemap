@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CancelPortScan, ExportPortScanReport, ScanPorts } from '../../wailsjs/go/main/App';
 import { main } from '../../wailsjs/go/models';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
@@ -22,6 +22,7 @@ import type {
 } from '../types';
 
 type Phase = 'options' | 'scanning' | 'done';
+type SortKey = 'port' | 'service';
 
 const MAX_MODAL_LOG_LINES = 2000;
 
@@ -131,7 +132,12 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
   const [done, setDone] = useState<PortScanDone | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogLine[]>([]);
+  const [filter, setFilter] = useState('');
+  const [sort, setSort] = useState<SortKey>('port');
+  const [showActivity, setShowActivity] = useState(false);
   const logIdRef = useRef(0);
+  const startedAtRef = useRef(0);
+  const durationRef = useRef(0);
 
   // pushLog mirrors a line into the modal's inline terminal and the shared
   // ports log channel.
@@ -158,6 +164,11 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
     setDone(null);
     setError(null);
     setLogs([]);
+    setFilter('');
+    setSort('port');
+    setShowActivity(false);
+    startedAtRef.current = 0;
+    durationRef.current = 0;
     setOptions((previous) => ({ ...previous, scope: 'single' }));
   }, [open, host]);
 
@@ -184,6 +195,7 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
       setDone(event);
       setProgress(null);
       setPhase('done');
+      durationRef.current = startedAtRef.current ? Date.now() - startedAtRef.current : 0;
       const scope = event.targets > 1 ? `${event.targets} targets · ` : '';
       pushLog('ok', `portscan complete · ${scope}${event.open} open / ${event.scanned} ports each`);
     });
@@ -191,6 +203,7 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
       setError(event.message);
       setProgress(null);
       setPhase('done');
+      durationRef.current = startedAtRef.current ? Date.now() - startedAtRef.current : 0;
       pushLog('error', `portscan error: ${event.message}`);
     });
     return () => {
@@ -222,11 +235,72 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
     [results],
   );
 
+  const multi = options.scope === 'all' && targets.length > 1;
+
+  const filtered = useMemo(() => {
+    const query = filter.trim().toLowerCase();
+    if (!query) {
+      return sortedResults;
+    }
+    return sortedResults.filter((entry) =>
+      [
+        String(entry.result.port),
+        entry.result.protocol,
+        entry.result.service,
+        entry.result.product,
+        entry.result.detail,
+        entry.result.banner,
+        entry.host,
+        entry.label,
+      ].some((value) => (value ?? '').toLowerCase().includes(query)),
+    );
+  }, [filter, sortedResults]);
+
+  // groups orders the resolved targets first (so empty hosts are still shown
+  // once the scan is done), then any extra hosts seen in the results.
+  const groups = useMemo(() => {
+    const scanned = multi ? targets : [{ label: label ?? '', host }];
+    const order: { host: string; label: string }[] = [];
+    const seen = new Set<string>();
+    if (phase === 'done') {
+      for (const target of scanned) {
+        if (target.host && !seen.has(target.host)) {
+          seen.add(target.host);
+          order.push({ host: target.host, label: target.label });
+        }
+      }
+    }
+    for (const entry of filtered) {
+      if (!seen.has(entry.host)) {
+        seen.add(entry.host);
+        order.push({ host: entry.host, label: entry.label ?? '' });
+      }
+    }
+    const byHost = new Map<string, PortOpenEvent[]>();
+    for (const entry of filtered) {
+      const rows = byHost.get(entry.host);
+      if (rows) {
+        rows.push(entry);
+      } else {
+        byHost.set(entry.host, [entry]);
+      }
+    }
+    return order.map((group) => {
+      const rows = byHost.get(group.host) ?? [];
+      rows.sort((a, b) =>
+        sort === 'service'
+          ? (a.result.service ?? '').localeCompare(b.result.service ?? '') || a.result.port - b.result.port
+          : a.result.port - b.result.port,
+      );
+      return { ...group, rows };
+    });
+  }, [filtered, host, label, multi, phase, sort, targets]);
+
+  const showHost = groups.length > 1;
+
   if (!open) {
     return null;
   }
-
-  const multi = options.scope === 'all' && targets.length > 1;
 
   const portSummary =
     options.preset === 'custom'
@@ -238,11 +312,15 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
       return;
     }
     const scanAll = canScanAll;
+    startedAtRef.current = Date.now();
+    durationRef.current = 0;
     setResults([]);
     setProgress(null);
     setDone(null);
     setError(null);
     setLogs([]);
+    setFilter('');
+    setShowActivity(false);
     setPhase('scanning');
     const scope = scanAll ? `${targets.length} targets` : host;
     pushLog('info', `▶ portscan ${scope} · ${options.protocol} · ${portSummary}`);
@@ -268,6 +346,7 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
     if (sortedResults.length === 0) {
       return;
     }
+    const scannedTargets = multi ? targets : [{ label: label ?? '', host }];
     const rows = sortedResults.map((entry) =>
       main.PortScanRow.createFrom({
         host: entry.host,
@@ -281,10 +360,32 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
         tls: entry.result.tls ?? false,
       }),
     );
-    ExportPortScanReport(rows)
+    const report = main.PortScanReport.createFrom({
+      target: label || host,
+      scope: multi ? `all targets (${targets.length})` : 'single host',
+      startedAt: startedAtRef.current,
+      durationMs: durationRef.current,
+      protocol: options.protocol === 'udp' ? 'UDP probe' : 'TCP connect',
+      ports:
+        options.preset === 'custom'
+          ? 'Custom range'
+          : PRESETS.find((preset) => preset.id === options.preset)?.label ?? options.preset,
+      portCount: done?.scanned ?? 0,
+      probe: options.probe,
+      concurrency: options.concurrency,
+      timeoutMs: options.timeoutMs,
+      scanned: done?.scanned ?? 0,
+      open: sortedResults.length,
+      targets: done?.targets ?? scannedTargets.length,
+      resolvedTargets: scannedTargets.map((target) =>
+        main.PortScanTargetInfo.createFrom({ label: target.label, host: target.host }),
+      ),
+      rows,
+    });
+    ExportPortScanReport(report)
       .then((path) => {
         if (path) {
-          pushLog('ok', `port scan saved to ${path}`);
+          pushLog('ok', `port scan report saved to ${path}`);
         }
       })
       .catch((err: unknown) => {
@@ -335,7 +436,7 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
                 disabled={sortedResults.length === 0}
                 onClick={handleExport}
               >
-                Export TSV
+                Export report
               </button>
               <button type="button" className="btn btn--primary" disabled={!canStart} onClick={start}>
                 Rescan
@@ -553,11 +654,119 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
                 </div>
               )}
 
+              {results.length > 0 && (
+                <>
+                  <div className="port-results-toolbar">
+                    <div className="input-wrap port-filter">
+                      <span className="input-prompt">›</span>
+                      <input
+                        className="input selectable"
+                        type="text"
+                        value={filter}
+                        spellCheck={false}
+                        autoComplete="off"
+                        placeholder="filter ports, services, hosts"
+                        onChange={(event) => setFilter(event.target.value)}
+                      />
+                    </div>
+                    <div className="port-sort">
+                      <button
+                        type="button"
+                        className={`port-sort-btn${sort === 'port' ? ' is-active' : ''}`}
+                        onClick={() => setSort('port')}
+                      >
+                        Port
+                      </button>
+                      <button
+                        type="button"
+                        className={`port-sort-btn${sort === 'service' ? ' is-active' : ''}`}
+                        onClick={() => setSort('service')}
+                      >
+                        Service
+                      </button>
+                    </div>
+                    <span className="port-results-count">
+                      {filtered.length === results.length
+                        ? `${results.length} open`
+                        : `${filtered.length} / ${results.length}`}
+                    </span>
+                  </div>
+
+                  {filtered.length === 0 ? (
+                    <div className="port-empty">No open ports match “{filter}”.</div>
+                  ) : (
+                    <div className="port-table">
+                      {groups.map((group) => (
+                        <Fragment key={group.host}>
+                          {showHost && (
+                            <div className="port-host">
+                              <span className="port-host-name selectable">
+                                {group.label && group.label !== group.host ? group.label : group.host}
+                              </span>
+                              {group.label && group.label !== group.host && (
+                                <span className="port-host-addr selectable">{group.host}</span>
+                              )}
+                              <span className="port-host-count">
+                                {group.rows.length} open
+                              </span>
+                            </div>
+                          )}
+                          <div className="port-row port-row--head">
+                            <span>PORT</span>
+                            <span>PROTO</span>
+                            <span>SERVICE</span>
+                            <span>IDENTIFICATION</span>
+                          </div>
+                          {group.rows.length === 0 ? (
+                            <div className="port-row port-row--empty">
+                              <span>no open ports</span>
+                            </div>
+                          ) : (
+                            group.rows.map((entry) => (
+                              <div className="port-row" key={`${entry.host}:${entry.result.port}/${entry.result.protocol}`}>
+                                <span className="port-num">{entry.result.port}</span>
+                                <span className="port-proto">{entry.result.protocol}</span>
+                                <span className="port-service">{entry.result.service || '—'}</span>
+                                <span className="port-ident">
+                                  {entry.result.product && (
+                                    <span className="port-product">{entry.result.product}</span>
+                                  )}
+                                  {entry.result.tls && <span className="port-tag">TLS</span>}
+                                  {(entry.result.detail || entry.result.banner) && (
+                                    <span className="port-banner" title={entry.result.detail || entry.result.banner}>
+                                      {entry.result.detail || entry.result.banner}
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </Fragment>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {phase === 'done' && results.length === 0 && !error && (
+                <div className="port-empty">No open ports found.</div>
+              )}
+
               <div className="domain-group">
-                <div className="domain-group-title">LIVE LOG · {logs.length}</div>
-                <div className="port-log">
-                  <ConsoleBody lines={logs} />
-                </div>
+                <button
+                  type="button"
+                  className={`port-activity-toggle${showActivity ? ' is-open' : ''}`}
+                  onClick={() => setShowActivity((previous) => !previous)}
+                  aria-expanded={showActivity}
+                >
+                  <span className="port-activity-caret">{showActivity ? '▾' : '▸'}</span>
+                  ACTIVITY · {logs.length}
+                </button>
+                {showActivity && (
+                  <div className="port-log">
+                    <ConsoleBody lines={logs} />
+                  </div>
+                )}
               </div>
             </>
           )}

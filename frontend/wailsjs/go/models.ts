@@ -497,6 +497,106 @@ export namespace main {
 	        this.remote = source["remote"];
 	    }
 	}
+	export class PortScanRow {
+	    host: string;
+	    label?: string;
+	    port: number;
+	    protocol: string;
+	    service?: string;
+	    product?: string;
+	    detail?: string;
+	    banner?: string;
+	    tls?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PortScanRow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.host = source["host"];
+	        this.label = source["label"];
+	        this.port = source["port"];
+	        this.protocol = source["protocol"];
+	        this.service = source["service"];
+	        this.product = source["product"];
+	        this.detail = source["detail"];
+	        this.banner = source["banner"];
+	        this.tls = source["tls"];
+	    }
+	}
+	export class PortScanTargetInfo {
+	    label: string;
+	    host: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PortScanTargetInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.host = source["host"];
+	    }
+	}
+	export class PortScanReport {
+	    target: string;
+	    scope: string;
+	    startedAt: number;
+	    durationMs: number;
+	    protocol: string;
+	    ports: string;
+	    portCount: number;
+	    probe: boolean;
+	    concurrency: number;
+	    timeoutMs: number;
+	    scanned: number;
+	    open: number;
+	    targets: number;
+	    resolvedTargets: PortScanTargetInfo[];
+	    rows: PortScanRow[];
+	
+	    static createFrom(source: any = {}) {
+	        return new PortScanReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target = source["target"];
+	        this.scope = source["scope"];
+	        this.startedAt = source["startedAt"];
+	        this.durationMs = source["durationMs"];
+	        this.protocol = source["protocol"];
+	        this.ports = source["ports"];
+	        this.portCount = source["portCount"];
+	        this.probe = source["probe"];
+	        this.concurrency = source["concurrency"];
+	        this.timeoutMs = source["timeoutMs"];
+	        this.scanned = source["scanned"];
+	        this.open = source["open"];
+	        this.targets = source["targets"];
+	        this.resolvedTargets = this.convertValues(source["resolvedTargets"], PortScanTargetInfo);
+	        this.rows = this.convertValues(source["rows"], PortScanRow);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class PortScanTarget {
 	    label: string;
 	    host: string;
@@ -555,34 +655,8 @@ export namespace main {
 		    return a;
 		}
 	}
-	export class PortScanRow {
-	    host: string;
-	    label?: string;
-	    port: number;
-	    protocol: string;
-	    service?: string;
-	    product?: string;
-	    detail?: string;
-	    banner?: string;
-	    tls?: boolean;
 	
-	    static createFrom(source: any = {}) {
-	        return new PortScanRow(source);
-	    }
 	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.host = source["host"];
-	        this.label = source["label"];
-	        this.port = source["port"];
-	        this.protocol = source["protocol"];
-	        this.service = source["service"];
-	        this.product = source["product"];
-	        this.detail = source["detail"];
-	        this.banner = source["banner"];
-	        this.tls = source["tls"];
-	    }
-	}
 	
 	export class ScanOptions {
 	    expandNs: boolean;

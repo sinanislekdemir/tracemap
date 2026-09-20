@@ -37,7 +37,9 @@ const SubdomainList = ({
       </button>
     </div>
     <div className="sub-list">
-      {subdomains.map((subdomain) => (
+      {subdomains.map((subdomain) => {
+        const ips = Array.isArray(subdomain.ips) ? subdomain.ips : [];
+        return (
         <button
           key={subdomain.name}
           type="button"
@@ -48,13 +50,14 @@ const SubdomainList = ({
           <span className="sub-main">
             <span className="sub-name selectable">{subdomain.name}</span>
             <span className="sub-meta">
-              {subdomain.ips.length} {subdomain.ips.length === 1 ? 'IP' : 'IPs'}
-              {subdomain.ips[0] ? ` · ${subdomain.ips[0]}` : ''}
+              {ips.length} {ips.length === 1 ? 'IP' : 'IPs'}
+              {ips[0] ? ` · ${ips[0]}` : ''}
             </span>
           </span>
           <span className={`sub-source sub-source--${subdomain.source}`}>{subdomain.source}</span>
         </button>
-      ))}
+        );
+      })}
     </div>
   </div>
 );

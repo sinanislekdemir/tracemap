@@ -8,7 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -181,6 +181,33 @@ type PortScanRow struct {
 	Detail   string `json:"detail,omitempty"`
 	Banner   string `json:"banner,omitempty"`
 	TLS      bool   `json:"tls,omitempty"`
+}
+
+// PortScanTargetInfo identifies one resolved target in a port-scan report.
+type PortScanTargetInfo struct {
+	Label string `json:"label"`
+	Host  string `json:"host"`
+}
+
+// PortScanReport captures the context of a port scan (the "initial data") and
+// its open ports, for a human-readable export. The frontend assembles it from
+// the scan options and the streamed results.
+type PortScanReport struct {
+	Target          string               `json:"target"`
+	Scope           string               `json:"scope"`
+	StartedAt       int64                `json:"startedAt"`
+	DurationMs      int64                `json:"durationMs"`
+	Protocol        string               `json:"protocol"`
+	Ports           string               `json:"ports"`
+	PortCount       int                  `json:"portCount"`
+	Probe           bool                 `json:"probe"`
+	Concurrency     int                  `json:"concurrency"`
+	TimeoutMs       int                  `json:"timeoutMs"`
+	Scanned         int                  `json:"scanned"`
+	Open            int                  `json:"open"`
+	Targets         int                  `json:"targets"`
+	ResolvedTargets []PortScanTargetInfo `json:"resolvedTargets"`
+	Rows            []PortScanRow        `json:"rows"`
 }
 
 // NetConnectRequest opens an interactive, line-oriented TCP session (netcat).
@@ -611,7 +638,8 @@ func crawlSubdomainResults(found []webcrawl.Subdomain) []subdomains.Result {
 		if sub.Name == "" {
 			continue
 		}
-		results = append(results, subdomains.Result{Name: sub.Name, Source: "crawl", IPs: sub.IPs})
+		// Normalise to a non-nil slice so the JSON payload carries [] not null.
+		results = append(results, subdomains.Result{Name: sub.Name, Source: "crawl", IPs: netutil.MergeUnique(nil, sub.IPs)})
 	}
 	return results
 }
@@ -648,6 +676,7 @@ func mergeSubdomainResults(base, extra []subdomains.Result) []subdomains.Result 
 		index[result.Name] = i
 	}
 	for _, result := range extra {
+		result.IPs = netutil.MergeUnique(nil, result.IPs)
 		if at, ok := index[result.Name]; ok {
 			base[at].IPs = netutil.MergeUnique(base[at].IPs, result.IPs)
 			continue
@@ -1010,53 +1039,205 @@ func (a *App) ExportOriginReport(report origin.Report) (string, error) {
 	return a.saveTextReport("Save origin discovery report", name+"-origin-report.txt", origin.FormatReport(report))
 }
 
-// ExportPortScanReport writes the supplied open ports as tab-separated text to
-// a path chosen by the user, returning the path (empty when cancelled).
-func (a *App) ExportPortScanReport(rows []PortScanRow) (string, error) {
-	return a.saveReport(
-		"Save port scan results", "portscan.tsv",
-		"Tab-separated files (*.tsv)", "*.tsv",
-		formatPortScanTSV(rows),
-	)
-}
-
-// portScanTSVHeader is the column order of an exported port-scan report.
-var portScanTSVHeader = []string{"host", "label", "port", "protocol", "service", "product", "tls", "detail"}
-
-// formatPortScanTSV renders rows as a tab-separated table with a header row.
-// Field values are stripped of tabs and newlines so they cannot break columns.
-func formatPortScanTSV(rows []PortScanRow) string {
-	var builder strings.Builder
-	builder.WriteString(strings.Join(portScanTSVHeader, "\t"))
-	builder.WriteByte('\n')
-	for _, row := range rows {
-		tls := ""
-		if row.TLS {
-			tls = "yes"
-		}
-		detail := row.Detail
-		if detail == "" {
-			detail = row.Banner
-		}
-		fields := []string{
-			sanitizeTSVField(row.Host),
-			sanitizeTSVField(row.Label),
-			strconv.Itoa(row.Port),
-			sanitizeTSVField(row.Protocol),
-			sanitizeTSVField(row.Service),
-			sanitizeTSVField(row.Product),
-			tls,
-			sanitizeTSVField(detail),
-		}
-		builder.WriteString(strings.Join(fields, "\t"))
-		builder.WriteByte('\n')
+// ExportPortScanReport writes the supplied scan context and open ports as a
+// human-readable text report to a path chosen by the user, returning the path
+// (empty when cancelled).
+func (a *App) ExportPortScanReport(report PortScanReport) (string, error) {
+	name := strings.TrimSpace(report.Target)
+	if name == "" {
+		name = "portscan"
 	}
-	return builder.String()
+	name = strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(name)
+	return a.saveTextReport("Save port scan report", name+"-portscan.txt", formatPortScanReport(report))
 }
 
-// sanitizeTSVField collapses tabs and newlines so a value stays in one cell.
-func sanitizeTSVField(value string) string {
-	return strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(strings.TrimSpace(value))
+// formatPortScanReport renders a port scan as a verbose, human-readable
+// document: the scan context ("initial data"), a summary, and the open ports
+// grouped per target.
+func formatPortScanReport(report PortScanReport) string {
+	var b strings.Builder
+	b.WriteString("PORT SCAN REPORT\n")
+	b.WriteString("================\n\n")
+
+	fmt.Fprintf(&b, "Target:       %s\n", fallbackReportValue(report.Target, "—"))
+	fmt.Fprintf(&b, "Scope:        %s\n", reportScope(report))
+	fmt.Fprintf(&b, "Started:      %s\n", formatReportTime(report.StartedAt))
+	fmt.Fprintf(&b, "Duration:     %s\n", formatReportDuration(report.DurationMs))
+	fmt.Fprintf(&b, "Protocol:     %s\n", fallbackReportValue(report.Protocol, "—"))
+	fmt.Fprintf(&b, "Ports:        %s\n", reportPortsLabel(report))
+	probe := "disabled"
+	if report.Probe {
+		probe = "enabled"
+	}
+	fmt.Fprintf(&b, "Identify:     %s\n", probe)
+	fmt.Fprintf(&b, "Pacing:       concurrency %d · timeout %dms\n", report.Concurrency, report.TimeoutMs)
+
+	targets := reportTargets(report)
+	if len(targets) > 0 {
+		b.WriteString("\nTARGETS\n-------\n")
+		for _, target := range targets {
+			fmt.Fprintf(&b, "  %-18s %s\n", target.Host, target.Label)
+		}
+	}
+
+	b.WriteString("\nSUMMARY\n-------\n")
+	fmt.Fprintf(&b, "  %d %s scanned\n", report.Targets, plural(report.Targets, "target", "targets"))
+	fmt.Fprintf(&b, "  %d open %s\n", report.Open, plural(report.Open, "port", "ports"))
+	fmt.Fprintf(&b, "  %d ports scanned per target\n", report.Scanned)
+
+	b.WriteString("\nOPEN PORTS\n----------\n")
+	if len(report.Rows) == 0 {
+		b.WriteString("\n  No open ports were found.\n")
+		return b.String()
+	}
+	byHost := make(map[string][]PortScanRow, len(targets))
+	for _, row := range report.Rows {
+		byHost[row.Host] = append(byHost[row.Host], row)
+	}
+	for _, target := range targets {
+		rows := byHost[target.Host]
+		delete(byHost, target.Host)
+		b.WriteString("\n")
+		b.WriteString(targetHeading(target))
+		b.WriteString("\n")
+		if len(rows) == 0 {
+			b.WriteString("  no open ports\n")
+			continue
+		}
+		sortPortScanRows(rows)
+		for _, row := range rows {
+			b.WriteString(formatPortScanRow(row))
+		}
+	}
+	// Any rows for hosts that were not listed as resolved targets.
+	remaining := make([]string, 0, len(byHost))
+	for host := range byHost {
+		remaining = append(remaining, host)
+	}
+	sort.Strings(remaining)
+	for _, host := range remaining {
+		rows := byHost[host]
+		sortPortScanRows(rows)
+		b.WriteString("\n")
+		b.WriteString(host)
+		b.WriteString("\n")
+		for _, row := range rows {
+			b.WriteString(formatPortScanRow(row))
+		}
+	}
+	return b.String()
+}
+
+// reportTargets returns the resolved targets in report order, falling back to
+// the hosts seen in the rows when none were supplied.
+func reportTargets(report PortScanReport) []PortScanTargetInfo {
+	if len(report.ResolvedTargets) > 0 {
+		return report.ResolvedTargets
+	}
+	seen := make(map[string]bool)
+	var out []PortScanTargetInfo
+	for _, row := range report.Rows {
+		if seen[row.Host] {
+			continue
+		}
+		seen[row.Host] = true
+		out = append(out, PortScanTargetInfo{Label: row.Label, Host: row.Host})
+	}
+	return out
+}
+
+func reportScope(report PortScanReport) string {
+	if report.Scope != "" {
+		return report.Scope
+	}
+	if report.Targets > 1 {
+		return fmt.Sprintf("all targets (%d)", report.Targets)
+	}
+	return "single host"
+}
+
+func reportPortsLabel(report PortScanReport) string {
+	label := fallbackReportValue(report.Ports, "—")
+	if report.PortCount > 0 {
+		label = fmt.Sprintf("%s (%d ports)", label, report.PortCount)
+	}
+	return label
+}
+
+func targetHeading(target PortScanTargetInfo) string {
+	if target.Label == "" || target.Label == target.Host {
+		return target.Host
+	}
+	return fmt.Sprintf("%s (%s)", target.Label, target.Host)
+}
+
+// formatPortScanRow renders one open port plus its identification details.
+func formatPortScanRow(row PortScanRow) string {
+	var b strings.Builder
+	parts := []string{
+		fmt.Sprintf("%-10s", fmt.Sprintf("%d/%s", row.Port, row.Protocol)),
+		"open",
+		fmt.Sprintf("%-10s", row.Service),
+	}
+	if row.Product != "" {
+		parts = append(parts, row.Product)
+	}
+	line := "  " + strings.Join(parts, " ")
+	if row.TLS {
+		line += "  [TLS]"
+	}
+	b.WriteString(strings.TrimRight(line, " "))
+	b.WriteByte('\n')
+	if row.Detail != "" {
+		fmt.Fprintf(&b, "      detail: %s\n", oneLine(row.Detail))
+	}
+	if row.Banner != "" && row.Banner != row.Detail {
+		fmt.Fprintf(&b, "      banner: %s\n", oneLine(row.Banner))
+	}
+	return b.String()
+}
+
+func sortPortScanRows(rows []PortScanRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Port < rows[j].Port
+	})
+}
+
+func formatReportTime(ms int64) string {
+	if ms <= 0 {
+		return "—"
+	}
+	return time.UnixMilli(ms).Format("2006-01-02 15:04:05")
+}
+
+func formatReportDuration(ms int64) string {
+	if ms <= 0 {
+		return "—"
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Second {
+		return d.Round(time.Millisecond).String()
+	}
+	return d.Round(100 * time.Millisecond).String()
+}
+
+func fallbackReportValue(value, alt string) string {
+	if strings.TrimSpace(value) == "" {
+		return alt
+	}
+	return value
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// oneLine collapses whitespace so a multi-line banner stays on one report line.
+func oneLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 // Cancel stops the running trace or scan, if any.

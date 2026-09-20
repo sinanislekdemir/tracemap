@@ -27,7 +27,7 @@ export function ExportDomainReport(arg1:domaincheck.Report):Promise<string>;
 
 export function ExportOriginReport(arg1:origin.Report):Promise<string>;
 
-export function ExportPortScanReport(arg1:Array<main.PortScanRow>):Promise<string>;
+export function ExportPortScanReport(arg1:main.PortScanReport):Promise<string>;
 
 export function ListHistory():Promise<Array<history.Summary>>;
 

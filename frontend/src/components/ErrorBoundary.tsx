@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
+import CrashScreen from './CrashScreen';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -7,33 +8,30 @@ interface ErrorBoundaryProps {
 
 interface ErrorBoundaryState {
   error: Error | null;
+  componentStack: string;
 }
 
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null };
+  state: ErrorBoundaryState = { error: null, componentStack: '' };
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     return { error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('render error', error, info);
+    this.setState({ componentStack: info.componentStack ?? '' });
   }
 
   render() {
     if (this.state.error) {
       return (
-        <div className="crash">
-          <div className="crash-title">RENDER ERROR</div>
-          <div className="crash-message selectable">{this.state.error.message}</div>
-          <button
-            type="button"
-            className="btn btn--primary"
-            onClick={() => this.setState({ error: null })}
-          >
-            Retry
-          </button>
-        </div>
+        <CrashScreen
+          title="RENDER ERROR"
+          error={this.state.error}
+          componentStack={this.state.componentStack}
+          onRetry={() => this.setState({ error: null, componentStack: '' })}
+        />
       );
     }
     return this.props.children;

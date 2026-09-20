@@ -4,6 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import './style.css';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
+import GlobalErrorBridge from './components/GlobalErrorBridge';
 
 const container = document.getElementById('root');
 if (!container) {
@@ -13,7 +14,9 @@ if (!container) {
 createRoot(container).render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      <GlobalErrorBridge>
+        <App />
+      </GlobalErrorBridge>
     </ErrorBoundary>
   </StrictMode>,
 );

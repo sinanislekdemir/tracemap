@@ -145,8 +145,10 @@ PLAN.md                     design/architecture document
   scanned with bounded host concurrency (`portScanHostConcurrency`), `portscan:open`
   carries the owning host/label in a `PortOpenEvent`, and the progress/done
   events report the target index/count. `App.ExportPortScanReport` writes the
-  collected open ports as tab-separated text via the native save dialog
-  (`formatPortScanTSV`, `.tsv` filter).
+  scan context plus the collected open ports as a verbose human-readable text
+  report via the native save dialog (`formatPortScanReport`, `.txt`); the
+  frontend assembles a `PortScanReport` (scan options, resolved targets, timing,
+  `[]PortScanRow`) for it.
 - **Domain analysis** (`internal/domaincheck`): builds a security/reliability
   report for a domain. Registration comes from RDAP via the IANA bootstrap
   (`data.iana.org/rdap/dns.json`, cached in memory), falling back to classic
@@ -267,12 +269,14 @@ PLAN.md                     design/architecture document
   generic cursor menu raised by `HopList`, `TraceList` and the map markers)
   offers **Find open ports** for a specific IP. When more than one resolved scan
   target exists, the modal offers a **TARGETS** scope toggle — *This host* or
-  *All targets (N)* — and an **Export TSV** footer button (calls
-  `ExportPortScanReport`) that dumps the open ports as a host/port table. The
+  *All targets (N)* — and an **Export report** footer button (calls
+  `ExportPortScanReport`) that writes a verbose human-readable `.txt` report
+  (scan context + per-target open ports). The
   modal goes options → live
-  results, owns its own `portscan:*` subscriptions, and streams open ports into
-  an inline LIVE LOG terminal (`ConsoleBody`, capped at 2000 lines) rather than
-  a table, since a scan can find many ports. It cancels through `CancelPortScan`
+  results, owns its own `portscan:*` subscriptions, and streams open ports into a
+  structured table (grouped per host, with a filter and a port/service sort)
+  while the raw event stream stays in a collapsible **ACTIVITY** pane
+  (`ConsoleBody`, capped at 2000 lines). It cancels through `CancelPortScan`
   (independent of traces). Do not add a `window` `contextmenu` listener to close
   the menu — it can fire for the same event that opened it;
   `pointerdown`/`blur`/`Escape` suffice.
@@ -289,6 +293,12 @@ PLAN.md                     design/architecture document
   (`scanCompleted`), hinting "scanning must complete to use this tool".
 - After adding or renaming a bound Go method, run `make bindings` or the
   frontend imports will not compile.
+- **Crash reporting**: `ErrorBoundary` (root, in `main.tsx`) renders
+  `CrashScreen` — the error, its `stack`, the React `componentStack` and the
+  environment, with a Copy button. `GlobalErrorBridge` (inside the boundary)
+  turns uncaught `window` errors and unhandled promise rejections into render
+  errors so they hit the same screen instead of vanishing into the webview
+  console.
 
 ## Testing
 

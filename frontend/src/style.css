@@ -1978,19 +1978,36 @@ body {
   color: #f472b6;
 }
 
-/* ---------- error boundary ---------- */
+/* ---------- error boundary / crash screen ---------- */
 
 .crash {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
   height: 100vh;
   padding: 24px;
   background: var(--bg);
   color: var(--text);
-  text-align: center;
+}
+.crash--overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  height: auto;
+  background: rgba(3, 6, 10, 0.86);
+  backdrop-filter: blur(3px);
+}
+.crash-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(860px, 100%);
+  max-height: 100%;
+  padding: 18px 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
 }
 .crash-title {
   font-family: var(--mono);
@@ -1998,12 +2015,32 @@ body {
   letter-spacing: 0.14em;
   color: var(--err);
 }
-.crash-message {
-  max-width: 720px;
-  font-family: var(--mono);
-  font-size: 11.5px;
+.crash-hint {
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.crash-trace {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
   color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
   word-break: break-word;
+  overflow: auto;
+  user-select: text;
+}
+.crash-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 /* ---------- context menu ---------- */
@@ -2220,7 +2257,8 @@ body {
   flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 8px;
-  overflow: hidden;
+  overflow-y: auto;
+  max-height: 360px;
 }
 .port-row {
   display: grid;
@@ -2290,6 +2328,114 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+.port-host {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.port-host-name {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+}
+.port-host-addr {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.port-host-count {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.port-row--empty {
+  grid-template-columns: 1fr;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-style: italic;
+}
+.port-results-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.port-filter {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.port-sort {
+  display: flex;
+  gap: 4px;
+}
+.port-sort-btn {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.port-sort-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.port-sort-btn.is-active {
+  border-color: rgba(45, 212, 239, 0.6);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.port-results-count {
+  flex: none;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.port-empty {
+  padding: 18px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-align: center;
+}
+.port-activity-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 2px;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+}
+.port-activity-toggle:hover,
+.port-activity-toggle.is-open {
+  color: var(--accent);
+}
+.port-activity-caret {
+  font-size: 10px;
 }
 
 /* ---------- domain analysis modal ---------- */

@@ -16,7 +16,7 @@ import { buildDisplayHops, isLocated } from '../traces';
 import { formatCoords } from '../format';
 import OsmLink from './OsmLink';
 import cities from '../assets/cities.json';
-import { countries } from '../world';
+import { countries, land } from '../world';
 import type { HopData, OriginMarker, TraceState } from '../types';
 
 interface TracerouteMapProps {
@@ -43,10 +43,23 @@ const ALL_LABELS_ZOOM = 5;
 const MAJOR_POP = 2_000_000;
 
 // Leaflet draws the vector basemap with inline SVG attributes, so the colours
-// cannot come from CSS variables; keep a small palette per theme instead.
+// cannot come from CSS variables; keep a small palette per theme instead. The
+// sea colour lives in CSS (`--map-sea`) and must stay in sync with `land`.
 const MAP_COLORS = {
-  dark: { border: '#22384a', fill: '#0e1822', dot: '#7d9bb0', hopFill: '#0a2833' },
-  light: { border: '#c2cfdc', fill: '#e8eef4', dot: '#8fa6b8', hopFill: '#d8e4ee' },
+  dark: {
+    land: '#182630',
+    coast: '#3a5a73',
+    border: '#243b4d',
+    dot: '#7d9bb0',
+    hopFill: '#0a2833',
+  },
+  light: {
+    land: '#f5f8fb',
+    coast: '#9db4c8',
+    border: '#c3d0dc',
+    dot: '#8fa6b8',
+    hopFill: '#d8e4ee',
+  },
 };
 
 // originIcon marks a confirmed/likely origin discovered by "Unmask target".
@@ -193,11 +206,17 @@ const TracerouteMap = ({
   theme,
 }: TracerouteMapProps) => {
   const mapColors = MAP_COLORS[theme];
-  const countryStyle = {
-    color: mapColors.border,
-    weight: 0.6,
-    fillColor: mapColors.fill,
+  const landStyle = {
+    color: mapColors.coast,
+    weight: 0.8,
+    fillColor: mapColors.land,
     fillOpacity: 1,
+  };
+  const borderStyle = {
+    color: mapColors.border,
+    weight: 0.45,
+    fill: false,
+    opacity: 0.9,
   };
   const [legendOpen, setLegendOpen] = useState(true);
   const visible = selectedTraces.size === 0 ? traces : traces.filter((trace) => selectedTraces.has(trace.id));
@@ -229,11 +248,17 @@ const TracerouteMap = ({
           attributionControl
         >
           <GeoJSON
+            key={`land:${theme}`}
+            data={land}
+            interactive={false}
+            attribution="Natural Earth"
+            style={landStyle}
+          />
+          <GeoJSON
             key={`countries:${theme}`}
             data={countries}
             interactive={false}
-            attribution="Natural Earth"
-            style={countryStyle}
+            style={borderStyle}
           />
           <CityLayer key={`cities:${theme}`} dotColor={mapColors.dot} />
           <ScaleControl position="bottomleft" imperial={false} />

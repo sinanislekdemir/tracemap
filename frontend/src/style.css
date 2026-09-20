@@ -14,6 +14,7 @@
   --warn: #f5b642;
   --err: #ff6b6b;
   --deep: #070b10;
+  --map-sea: #0a1622;
   --input-bg: #070c12;
   --bar-grad: linear-gradient(180deg, #101a25, #0c141d);
   --win-grad: linear-gradient(180deg, #101a25, #0b1219);
@@ -57,6 +58,7 @@
   --warn: #b3760a;
   --err: #d64545;
   --deep: #e7edf3;
+  --map-sea: #cbdcec;
   --input-bg: #ffffff;
   --bar-grad: linear-gradient(180deg, #ffffff, #f0f4f8);
   --win-grad: linear-gradient(180deg, #ffffff, #f0f4f8);
@@ -730,7 +732,7 @@ body {
   position: relative;
   min-width: 0;
   min-height: 0;
-  background: var(--deep);
+  background: var(--map-sea);
 }
 
 .map-canvas {
@@ -741,7 +743,7 @@ body {
 .leaflet-container {
   width: 100%;
   height: 100%;
-  background: var(--deep);
+  background: var(--map-sea);
   font-family: var(--mono);
   outline: none;
 }

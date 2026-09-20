@@ -4,7 +4,8 @@
 
 **A desktop traceroute visualizer.** tracemap runs `traceroute`/`tracert` from
 your own machine, geolocates every responsive hop, and draws the path on an
-interactive world map. It can resolve a domain's DNS records and trace every
+interactive world map (rendered fully offline — no tile server). It can resolve
+a domain's DNS records and trace every
 address it finds, save completed traces to a local database, replay any
 selection back onto the map to compare routes and spot shared hops, grade a
 domain's security and reliability with a WHOIS/RDAP, DNS, email-auth and TLS
@@ -87,7 +88,12 @@ highlighted as correlation points.*
   (LF/CRLF/none) and streams the peer's raw output back; optional TLS for
   encrypted services. TCP only.
 - **Geolocation** — every responsive hop is resolved to coordinates, city,
-  country and ASN/ISP, with a persistent cache so repeat hops are instant.
+  country and ASN/ISP, with a persistent cache so repeat hops are instant. The
+  coordinates are shown in the hop list and map popup, with an **Open in
+  OpenStreetMap** link that opens the location in your default browser.
+- **Offline world map** — the basemap is bundled Natural Earth vector data
+  (1:110m country borders plus 243 major cities), so it needs no network and no
+  tile server and works on every platform.
 - **History** — explicitly save completed traces and scans to a local SQLite
   database, then browse, replay, delete or clear them.
 - **Comparison & correlation** — load a selection of saved traces onto one map;
@@ -224,8 +230,10 @@ make clean        # remove build/bin, frontend/dist
    saved entries.
 
 Hops that have no coordinates (private addresses, geolocation misses) stay in
-the hop list but are omitted from the map. The target address is always shown
-as the final entry, even if the trace never reaches it.
+the hop list but are omitted from the map. Located hops show their
+latitude/longitude in the hop list and popup, each with an **Open in
+OpenStreetMap** link. The target address is always shown as the final entry,
+even if the trace never reaches it.
 
 ## History & comparison
 

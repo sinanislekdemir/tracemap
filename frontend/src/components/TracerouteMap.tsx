@@ -1,17 +1,22 @@
 import { Fragment, useEffect, useState } from 'react';
 import {
   CircleMarker,
+  GeoJSON,
   MapContainer,
   Marker,
   Polyline,
   Popup,
   ScaleControl,
-  TileLayer,
+  Tooltip,
   useMap,
 } from 'react-leaflet';
 import { divIcon } from 'leaflet';
 import type { LatLngBoundsExpression, LatLngExpression } from 'leaflet';
 import { buildDisplayHops, isLocated } from '../traces';
+import { formatCoords } from '../format';
+import OsmLink from './OsmLink';
+import cities from '../assets/cities.json';
+import { countries } from '../world';
 import type { HopData, OriginMarker, TraceState } from '../types';
 
 interface TracerouteMapProps {
@@ -28,10 +33,20 @@ interface TracerouteMapProps {
 
 const DEFAULT_CENTER: LatLngExpression = [25, 10];
 const DEFAULT_ZOOM = 2;
+const MAX_ZOOM = 8;
 
-const TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const TILE_ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+// City labels stay hidden at world zoom and only appear once the map is
+// close enough that they don't overlap; below that only the dots show.
+const LABEL_ZOOM = 3;
+const ALL_LABELS_ZOOM = 5;
+const MAJOR_POP = 2_000_000;
+
+const COUNTRY_STYLE = {
+  color: '#22384a',
+  weight: 0.6,
+  fillColor: '#0e1822',
+  fillOpacity: 1,
+};
 
 // originIcon marks a confirmed/likely origin discovered by "Unmask target".
 const originIcon = divIcon({
@@ -99,6 +114,47 @@ function locate(hops: HopData[]): Located[] {
   });
 }
 
+/** Major-world-city reference dots; names appear only when zoomed in. */
+function CityLayer() {
+  const map = useMap();
+  const [zoom, setZoom] = useState(map.getZoom());
+
+  useEffect(() => {
+    const onZoom = () => setZoom(map.getZoom());
+    map.on('zoomend', onZoom);
+    return () => {
+      map.off('zoomend', onZoom);
+    };
+  }, [map]);
+
+  const showAll = zoom >= ALL_LABELS_ZOOM;
+  const showMajor = zoom >= LABEL_ZOOM;
+
+  return (
+    <>
+      {cities.map((city) => {
+        const label = showAll || (showMajor && (city.worldcity || city.pop >= MAJOR_POP));
+        return (
+          <CircleMarker
+            key={`city:${city.name}:${city.lat}:${city.lon}`}
+            center={[city.lat, city.lon]}
+            radius={showAll ? 2 : 1.6}
+            interactive={false}
+            className="city-dot"
+            pathOptions={{ color: '#7d9bb0', fillColor: '#7d9bb0', fillOpacity: 0.7, weight: 0 }}
+          >
+            {label ? (
+              <Tooltip permanent direction="right" offset={[3, 0]} className="city-label">
+                {city.name}
+              </Tooltip>
+            ) : null}
+          </CircleMarker>
+        );
+      })}
+    </>
+  );
+}
+
 function MapEffects({ positions, focus, focusActive }: { positions: Coord[]; focus: Coord | null; focusActive: boolean }) {
   const map = useMap();
   const key = JSON.stringify(positions);
@@ -108,15 +164,15 @@ function MapEffects({ positions, focus, focusActive }: { positions: Coord[]; foc
       return;
     }
     if (positions.length === 1) {
-      map.setView(positions[0], 6);
+      map.setView(positions[0], 4);
       return;
     }
-    map.fitBounds(positions as LatLngBoundsExpression, { padding: [56, 56], maxZoom: 7 });
+    map.fitBounds(positions as LatLngBoundsExpression, { padding: [56, 56], maxZoom: 5 });
   }, [map, key, focusActive]);
 
   useEffect(() => {
     if (focus) {
-      map.flyTo(focus, Math.max(map.getZoom(), 5), { duration: 0.7 });
+      map.flyTo(focus, Math.max(map.getZoom(), 4), { duration: 0.7 });
     }
   }, [map, focus?.[0], focus?.[1]]);
 
@@ -155,8 +211,21 @@ const TracerouteMap = ({
   return (
     <div className="map-wrap">
       <div className="map-canvas">
-        <MapContainer center={DEFAULT_CENTER} zoom={DEFAULT_ZOOM} scrollWheelZoom zoomControl attributionControl>
-          <TileLayer attribution={TILE_ATTRIBUTION} url={TILE_URL} subdomains={['a', 'b', 'c']} />
+        <MapContainer
+          center={DEFAULT_CENTER}
+          zoom={DEFAULT_ZOOM}
+          maxZoom={MAX_ZOOM}
+          scrollWheelZoom
+          zoomControl
+          attributionControl
+        >
+          <GeoJSON
+            data={countries}
+            interactive={false}
+            attribution="Natural Earth"
+            style={COUNTRY_STYLE}
+          />
+          <CityLayer />
           <ScaleControl position="bottomleft" imperial={false} />
 
           {rendered.map(({ trace, located, route }) => {
@@ -235,7 +304,19 @@ const TracerouteMap = ({
                         LOC&nbsp;{hop.geo?.city || 'unknown'}
                         {hop.geo?.country ? ` (${hop.geo.country})` : ''}
                         <br />
+                        LAT/LON&nbsp;{hop.geo ? formatCoords(hop.geo.lat, hop.geo.lon) : 'unknown'}
+                        <br />
                         ASN&nbsp;{hop.geo?.asn || 'unknown'}
+                        {hop.geo ? (
+                          <>
+                            <br />
+                            <OsmLink
+                              className="popup-osm"
+                              lat={hop.geo.lat}
+                              lon={hop.geo.lon}
+                            />
+                          </>
+                        ) : null}
                         {shared ? (
                           <>
                             <br />

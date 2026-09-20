@@ -262,6 +262,12 @@ PLAN.md                     design/architecture document
   `CircleMarker`/`Polyline`. Putting it in `pathOptions` routes it through
   `setStyle()`, which silently drops it. Colours go in `pathOptions`; animations
   go in `className` + CSS.
+- **The basemap is fully offline** (no tile server, so it works on Windows and
+  without network). Country borders come from Natural Earth 1:110m via
+  `world-atlas` + `topojson-client` in `src/world.ts`, cut at the antimeridian
+  by `src/antimeridian.ts` (Leaflet would otherwise draw Fiji/Russia as a band
+  across the map); major cities come from `src/assets/cities.json`. City names
+  only render at `LABEL_ZOOM`+ to avoid clutter.
 - **Trace colours** come from `src/colors.ts`, assigned by target index.
 - **History view**: `HistoryModal` lists saved entries; loading selection
   replaces the main map's traces with fresh contiguous ids/colours and sets

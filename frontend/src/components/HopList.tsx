@@ -1,4 +1,7 @@
-import type { MouseEvent } from 'react';
+import type { KeyboardEvent, MouseEvent } from 'react';
+import { formatCoords } from '../format';
+import { isLocated } from '../traces';
+import OsmLink from './OsmLink';
 import type { HopData } from '../types';
 
 interface HopListProps {
@@ -61,13 +64,23 @@ const HopList = ({ hops, selectedHop, onSelectHop, onContextMenu, sharedHops }: 
         if (hop.hop === selectedHop) classes.push('is-selected');
 
         const barPct = hop.rttMs != null && maxRtt > 0 ? Math.max(6, (hop.rttMs / maxRtt) * 100) : 0;
+        const located = isLocated(hop) && hop.geo != null;
+
+        const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onSelectHop(hop.hop);
+          }
+        };
 
         return (
-          <button
+          <div
             key={hop.hop}
-            type="button"
+            role="button"
+            tabIndex={0}
             className={classes.join(' ')}
             onClick={() => onSelectHop(hop.hop)}
+            onKeyDown={onKeyDown}
             onContextMenu={(event) => onContextMenu?.(event, hop)}
           >
             <span className="hop-num">{hop.isTarget ? 'TGT' : String(hop.hop).padStart(2, '0')}</span>
@@ -80,6 +93,9 @@ const HopList = ({ hops, selectedHop, onSelectHop, onContextMenu, sharedHops }: 
                 {locationText(hop)}
                 {hop.geo?.asn ? <span className="hop-asn"> · {hop.geo.asn}</span> : null}
               </span>
+              {located ? (
+                <span className="hop-coords">{formatCoords(hop.geo!.lat, hop.geo!.lon)}</span>
+              ) : null}
             </span>
             <span className="hop-rtt">
               <span className="hop-rtt-val">
@@ -94,7 +110,12 @@ const HopList = ({ hops, selectedHop, onSelectHop, onContextMenu, sharedHops }: 
                 />
               </span>
             </span>
-          </button>
+            {located ? (
+              <OsmLink className="hop-osm" label="OSM" lat={hop.geo!.lat} lon={hop.geo!.lon} />
+            ) : (
+              <span className="hop-osm hop-osm--empty" aria-hidden="true" />
+            )}
+          </div>
         );
       })}
     </>

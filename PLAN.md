@@ -3,7 +3,7 @@
 A desktop app that visualizes network traceroutes on a world map. The user enters
 a target host, the app runs a traceroute **from the local machine**, resolves the
 geographic location of each hop, and draws the path as an animated polyline on an
-OpenStreetMap map.
+offline world map (local vector borders + major cities).
 
 ## 1. Goal & Scope
 
@@ -105,7 +105,9 @@ Go backend (in-process)
 - **Cancellation**: `App.Cancel` cancels the running trace, scan or port scan.
 
 ### 3.2 Frontend (React + TypeScript)
-- **Map**: Leaflet + OpenStreetMap tiles (no API key, free) via `react-leaflet`.
+- **Map**: Leaflet via `react-leaflet`, rendered from bundled Natural Earth
+  vector data (1:110m country borders via `world-atlas`/`topojson-client` plus a
+  small major-cities list) — fully offline, no tile server or API key.
 - **Path rendering**: ordered polyline through hop coordinates; a marker per hop
   with a popup showing hop #, IP, RTT, city and ASN.
 - **Detail table**: numbered hop list; unresponsive hops (`*`) shown as gaps;
@@ -131,7 +133,7 @@ Go backend (in-process)
 | GeoIP       | Local GeoLite2 (City + ASN `.mmdb`), `ipwho.is` fallback |
 | Concurrency | goroutines for parallel hop geo lookups            |
 | Frontend    | Vite + React 19 + TypeScript                       |
-| Map         | Leaflet + OpenStreetMap                            |
+| Map         | Leaflet + offline Natural Earth vector basemap     |
 | Packaging   | Single native binary (`wails build`)               |
 
 > On Linux with WebKitGTK 4.1 the build requires the `webkit2_41` tag:

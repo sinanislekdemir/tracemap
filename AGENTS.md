@@ -224,6 +224,14 @@ PLAN.md                     design/architecture document
   Bound methods: `SaveHistory`, `ListHistory`, `LoadHistory`,
   `DeleteHistory`, `ClearHistory`. The frontend builds the snapshot (it holds the
   async geo results); nothing is saved automatically.
+- **GeoIP cache viewer**: `internal/geolocator` exposes the persistent
+  `geo_cache` contents through `Resolver.CacheInfo`/`CacheEntries`/
+  `DeleteCacheEntry`/`ClearCache` (deleting/clearing also evicts the in-memory
+  copy so the next lookup refreshes). Bound methods: `GeoCacheInfo`,
+  `ListGeoCache`, `DeleteGeoCacheEntry`, `ClearGeoCache`. The frontend
+  `GeoCacheModal` (Tools ▾ → **GeoIP cache**) lists cached replies newest first
+  with a filter, per-entry delete and clear-all, and reports whether persistence
+  is disabled (`TRACEROUTE_DB` unset/off).
 - **Shared-hop correlation** is computed in the frontend (`App.tsx`): IPs present
   in 2+ traces become `sharedHops`, highlighted on the map and in the hop list.
 

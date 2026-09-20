@@ -302,6 +302,25 @@ export interface HistoryEntry {
   traces: HistoryTrace[];
 }
 
+/** One stored geolocation reply in the persistent cache. */
+export interface GeoCacheEntry {
+  ip: string;
+  lat: number;
+  lon: number;
+  city: string;
+  country: string;
+  asn: string;
+  fetchedAt: number;
+  expired: boolean;
+}
+
+/** State of the persistent geolocation cache. */
+export interface GeoCacheInfo {
+  enabled: boolean;
+  path: string;
+  count: number;
+}
+
 export type CheckStatus = 'pass' | 'warn' | 'fail' | 'info';
 
 export interface DomainProgressEvent {

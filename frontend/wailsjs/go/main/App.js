@@ -26,12 +26,20 @@ export function CheckTools() {
   return window['go']['main']['App']['CheckTools']();
 }
 
+export function ClearGeoCache() {
+  return window['go']['main']['App']['ClearGeoCache']();
+}
+
 export function ClearHistory() {
   return window['go']['main']['App']['ClearHistory']();
 }
 
 export function CreateUnmaskRules() {
   return window['go']['main']['App']['CreateUnmaskRules']();
+}
+
+export function DeleteGeoCacheEntry(arg1) {
+  return window['go']['main']['App']['DeleteGeoCacheEntry'](arg1);
 }
 
 export function DeleteHistory(arg1) {
@@ -48,6 +56,14 @@ export function ExportOriginReport(arg1) {
 
 export function ExportPortScanReport(arg1) {
   return window['go']['main']['App']['ExportPortScanReport'](arg1);
+}
+
+export function GeoCacheInfo() {
+  return window['go']['main']['App']['GeoCacheInfo']();
+}
+
+export function ListGeoCache() {
+  return window['go']['main']['App']['ListGeoCache']();
 }
 
 export function ListHistory() {

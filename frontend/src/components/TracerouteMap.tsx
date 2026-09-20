@@ -1,4 +1,4 @@
-import { Fragment, useEffect } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import {
   CircleMarker,
   MapContainer,
@@ -134,6 +134,7 @@ const TracerouteMap = ({
   sharedHops,
   origins,
 }: TracerouteMapProps) => {
+  const [legendOpen, setLegendOpen] = useState(true);
   const visible = selectedTraces.size === 0 ? traces : traces.filter((trace) => selectedTraces.has(trace.id));
 
   const rendered: Rendered[] = visible.map((trace) => {
@@ -267,22 +268,36 @@ const TracerouteMap = ({
         </MapContainer>
 
         <div className="map-legend">
-          <div className="legend-title">TRACES</div>
-          <div className="legend-rows">
-            {traces.map((trace) => (
-              <button
-                key={trace.id}
-                type="button"
-                className={`legend-row${selectedTraces.has(trace.id) ? ' is-selected' : ''}`}
-                onClick={() => onToggleTrace(trace.id)}
-              >
-                <span className="legend-line" style={{ background: trace.color }} />
-                <span className="legend-label">{trace.label}</span>
-                <span className="legend-ip selectable">{trace.ip}</span>
-              </button>
-            ))}
-          </div>
-          <div className="legend-hint">filled = endpoint · hollow = hop</div>
+          <button
+            type="button"
+            className="legend-title"
+            onClick={() => setLegendOpen((open) => !open)}
+            aria-expanded={legendOpen}
+            title={legendOpen ? 'Collapse traces legend' : 'Expand traces legend'}
+          >
+            <span className="legend-caret">{legendOpen ? '▾' : '▸'}</span>
+            TRACES
+            <span className="legend-count">{traces.length}</span>
+          </button>
+          {legendOpen && (
+            <>
+              <div className="legend-rows">
+                {traces.map((trace) => (
+                  <button
+                    key={trace.id}
+                    type="button"
+                    className={`legend-row${selectedTraces.has(trace.id) ? ' is-selected' : ''}`}
+                    onClick={() => onToggleTrace(trace.id)}
+                  >
+                    <span className="legend-line" style={{ background: trace.color }} />
+                    <span className="legend-label">{trace.label}</span>
+                    <span className="legend-ip selectable">{trace.ip}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="legend-hint">filled = endpoint · hollow = hop</div>
+            </>
+          )}
         </div>
 
         <div className="map-hud">

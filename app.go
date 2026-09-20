@@ -1296,6 +1296,27 @@ func (a *App) ClearHistory() error {
 	return a.hist.Clear(a.ctx)
 }
 
+// GeoCacheInfo reports the state of the persistent geolocation cache: whether
+// it is enabled, where it lives and how many replies it holds.
+func (a *App) GeoCacheInfo() geolocator.CacheInfo {
+	return a.geo.CacheInfo(a.ctx)
+}
+
+// ListGeoCache returns every cached geolocation reply, newest first.
+func (a *App) ListGeoCache() ([]geolocator.CacheEntry, error) {
+	return a.geo.CacheEntries(a.ctx)
+}
+
+// DeleteGeoCacheEntry removes a single IP from the geolocation cache.
+func (a *App) DeleteGeoCacheEntry(ip string) error {
+	return a.geo.DeleteCacheEntry(a.ctx, ip)
+}
+
+// ClearGeoCache removes every cached geolocation reply.
+func (a *App) ClearGeoCache() error {
+	return a.geo.ClearCache(a.ctx)
+}
+
 // filterUnroutable drops IPv6 targets when this host has no global IPv6
 // address, since tracing them can only fail. Target ids are renumbered so the
 // UI's colours stay contiguous.

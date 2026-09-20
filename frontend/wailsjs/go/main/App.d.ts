@@ -3,6 +3,7 @@
 import {domaincheck} from '../models';
 import {main} from '../models';
 import {origin} from '../models';
+import {geolocator} from '../models';
 import {history} from '../models';
 
 export function AnalyzeDomain(arg1:string):Promise<domaincheck.Report>;
@@ -17,9 +18,13 @@ export function CancelUnmaskTarget():Promise<void>;
 
 export function CheckTools():Promise<main.ToolStatus>;
 
+export function ClearGeoCache():Promise<void>;
+
 export function ClearHistory():Promise<void>;
 
 export function CreateUnmaskRules():Promise<string>;
+
+export function DeleteGeoCacheEntry(arg1:string):Promise<void>;
 
 export function DeleteHistory(arg1:number):Promise<void>;
 
@@ -28,6 +33,10 @@ export function ExportDomainReport(arg1:domaincheck.Report):Promise<string>;
 export function ExportOriginReport(arg1:origin.Report):Promise<string>;
 
 export function ExportPortScanReport(arg1:main.PortScanReport):Promise<string>;
+
+export function GeoCacheInfo():Promise<geolocator.CacheInfo>;
+
+export function ListGeoCache():Promise<Array<geolocator.CacheEntry>>;
 
 export function ListHistory():Promise<Array<history.Summary>>;
 

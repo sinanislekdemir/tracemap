@@ -16,6 +16,7 @@ interface ToolbarProps {
   onPortScan: () => void;
   onNet: () => void;
   onConsole: () => void;
+  onGeoCache: () => void;
   onCancel: () => void;
   onHistory: () => void;
   onAddToHistory: () => void;
@@ -36,6 +37,7 @@ const Toolbar = ({
   onPortScan,
   onNet,
   onConsole,
+  onGeoCache,
   onCancel,
   onHistory,
   onAddToHistory,
@@ -168,6 +170,11 @@ const Toolbar = ({
               label: 'Console',
               hint: 'activity log',
               onSelect: runTool(onConsole),
+            },
+            {
+              label: 'GeoIP cache',
+              hint: 'cached lookups',
+              onSelect: runTool(onGeoCache),
             },
           ]}
           onClose={() => setToolsOpen(false)}

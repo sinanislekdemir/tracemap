@@ -401,6 +401,133 @@ func TestStoreDisabledWhenPathEmpty(t *testing.T) {
 	}
 }
 
+func TestStoreListDeleteClear(t *testing.T) {
+	store, err := openStore(filepath.Join(t.TempDir(), "geo.db"))
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	store.put(ctx, "1.1.1.1", GeoData{Lat: 1, Lon: 2, City: "A", Country: "AA", ASN: "AS1", Resolved: true})
+	store.put(ctx, "2.2.2.2", GeoData{Lat: 3, Lon: 4, City: "B", Country: "BB", ASN: "AS2", Resolved: true})
+
+	entries, err := store.list(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(entries))
+	}
+	if n, err := store.count(ctx); err != nil || n != 2 {
+		t.Fatalf("count = %d, %v; want 2, nil", n, err)
+	}
+
+	if err := store.delete(ctx, "1.1.1.1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	entries, err = store.list(ctx)
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
+	if len(entries) != 1 || entries[0].IP != "2.2.2.2" {
+		t.Fatalf("entries after delete = %+v, want only 2.2.2.2", entries)
+	}
+
+	if err := store.clear(ctx); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	entries, err = store.list(ctx)
+	if err != nil {
+		t.Fatalf("list after clear: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries after clear = %d, want 0", len(entries))
+	}
+}
+
+func TestStoreListMarksExpired(t *testing.T) {
+	store, err := openStore(filepath.Join(t.TempDir(), "geo.db"))
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer store.Close()
+
+	old := time.Now().Add(-cacheTTL - time.Hour).Unix()
+	if _, err := store.db.Exec(
+		`INSERT INTO geo_cache (ip, lat, lon, city, country, asn, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"9.9.9.9", 1.0, 2.0, "", "", "", old); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	entries, err := store.list(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(entries) != 1 || !entries[0].Expired {
+		t.Fatalf("entries = %+v, want one expired entry", entries)
+	}
+}
+
+func TestResolverCacheAccessors(t *testing.T) {
+	ctx := context.Background()
+
+	disabled := newResolver(nil, nil)
+	if info := disabled.CacheInfo(ctx); info.Enabled {
+		t.Error("expected a disabled cache")
+	}
+	if entries, err := disabled.CacheEntries(ctx); err != nil || len(entries) != 0 {
+		t.Errorf("disabled CacheEntries = %+v, %v; want empty, nil", entries, err)
+	}
+	if err := disabled.DeleteCacheEntry(ctx, "1.1.1.1"); err != nil {
+		t.Errorf("disabled DeleteCacheEntry: %v", err)
+	}
+	if err := disabled.ClearCache(ctx); err != nil {
+		t.Errorf("disabled ClearCache: %v", err)
+	}
+
+	store, err := openStore(filepath.Join(t.TempDir(), "geo.db"))
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer store.Close()
+
+	resolver := newResolver(nil, nil)
+	resolver.store = store
+	resolver.remember("9.9.9.9", GeoData{Lat: 1, Lon: 2, Resolved: true})
+	store.put(ctx, "9.9.9.9", GeoData{Lat: 1, Lon: 2, City: "X", Resolved: true})
+
+	info := resolver.CacheInfo(ctx)
+	if !info.Enabled || info.Count != 1 || info.Path == "" {
+		t.Fatalf("CacheInfo = %+v, want enabled with 1 entry and a path", info)
+	}
+	if entries, err := resolver.CacheEntries(ctx); err != nil || len(entries) != 1 {
+		t.Fatalf("CacheEntries = %+v, %v; want 1 entry", entries, err)
+	}
+
+	if err := resolver.DeleteCacheEntry(ctx, "9.9.9.9"); err != nil {
+		t.Fatalf("DeleteCacheEntry: %v", err)
+	}
+	if _, ok := resolver.cache["9.9.9.9"]; ok {
+		t.Error("expected the in-memory entry to be evicted")
+	}
+	if info := resolver.CacheInfo(ctx); info.Count != 0 {
+		t.Errorf("count after delete = %d, want 0", info.Count)
+	}
+
+	store.put(ctx, "8.8.8.8", GeoData{Lat: 3, Lon: 4, Resolved: true})
+	resolver.remember("8.8.8.8", GeoData{Lat: 3, Lon: 4, Resolved: true})
+	if err := resolver.ClearCache(ctx); err != nil {
+		t.Fatalf("ClearCache: %v", err)
+	}
+	if len(resolver.cache) != 0 {
+		t.Error("expected the in-memory cache to be emptied")
+	}
+	if info := resolver.CacheInfo(ctx); info.Count != 0 {
+		t.Errorf("count after clear = %d, want 0", info.Count)
+	}
+}
+
 func TestFindDBEnvOverride(t *testing.T) {
 	path := filepath.Join(t.TempDir(), cityDBName)
 	if err := os.WriteFile(path, []byte("stub"), 0o644); err != nil {

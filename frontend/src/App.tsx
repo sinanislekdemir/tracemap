@@ -3,8 +3,12 @@ import type { CSSProperties } from 'react';
 import {
   Cancel,
   CheckTools,
+  ClearGeoCache,
   ClearHistory,
+  DeleteGeoCacheEntry,
   DeleteHistory,
+  GeoCacheInfo as fetchGeoCacheInfo,
+  ListGeoCache,
   ListHistory,
   LoadHistory,
   SaveHistory,
@@ -18,6 +22,7 @@ import CheatsheetPanel from './components/CheatsheetPanel';
 import ContextMenu from './components/ContextMenu';
 import DomainAnalysisModal from './components/DomainAnalysisModal';
 import FloatingWindow from './components/FloatingWindow';
+import GeoCacheModal from './components/GeoCacheModal';
 import HistoryModal from './components/HistoryModal';
 import HopList from './components/HopList';
 import MissingToolModal from './components/MissingToolModal';
@@ -60,6 +65,8 @@ import type {
   DNSRecord,
   DoneEvent,
   ErrorEvent,
+  GeoCacheEntry,
+  GeoCacheInfo,
   GeoEvent,
   HistoryEntry,
   HistorySummary,
@@ -116,6 +123,10 @@ const App = () => {
   const [historyEntries, setHistoryEntries] = useState<HistorySummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyDisabled, setHistoryDisabled] = useState(false);
+  const [geocacheOpen, setGeocacheOpen] = useState(false);
+  const [geocacheEntries, setGeocacheEntries] = useState<GeoCacheEntry[]>([]);
+  const [geocacheInfo, setGeocacheInfo] = useState<GeoCacheInfo | null>(null);
+  const [geocacheLoading, setGeocacheLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'live' | 'history'>('live');
   const [toast, setToast] = useState<string | null>(null);
   const [toolError, setToolError] = useState<{ message: string; hint: string } | null>(null);
@@ -670,6 +681,50 @@ const App = () => {
     void refreshHistory();
   }, [refreshHistory]);
 
+  const refreshGeoCache = useCallback(async () => {
+    setGeocacheLoading(true);
+    try {
+      const [list, info] = await Promise.all([ListGeoCache(), fetchGeoCacheInfo()]);
+      setGeocacheEntries(list as GeoCacheEntry[]);
+      setGeocacheInfo(info as GeoCacheInfo);
+    } catch {
+      setGeocacheEntries([]);
+      setGeocacheInfo({ enabled: false, path: '', count: 0 });
+    } finally {
+      setGeocacheLoading(false);
+    }
+  }, []);
+
+  const handleOpenGeoCache = useCallback(() => {
+    setGeocacheOpen(true);
+    void refreshGeoCache();
+  }, [refreshGeoCache]);
+
+  const handleDeleteGeoCacheEntry = useCallback(
+    (ip: string) => {
+      DeleteGeoCacheEntry(ip)
+        .then(() => {
+          showToast(`Removed ${ip} from cache`);
+          void refreshGeoCache();
+        })
+        .catch((err: unknown) => {
+          showToast(err instanceof Error ? err.message : 'Could not delete cache entry');
+        });
+    },
+    [refreshGeoCache, showToast],
+  );
+
+  const handleClearGeoCache = useCallback(() => {
+    ClearGeoCache()
+      .then(() => {
+        showToast('GeoIP cache cleared');
+        void refreshGeoCache();
+      })
+      .catch((err: unknown) => {
+        showToast(err instanceof Error ? err.message : 'Could not clear cache');
+      });
+  }, [refreshGeoCache, showToast]);
+
   const handleAddToHistory = useCallback(() => {
     if (busyRef.current || traces.length === 0) {
       return;
@@ -973,6 +1028,7 @@ const App = () => {
         onPortScan={handlePortScan}
         onNet={() => openNetcat(target.trim())}
         onConsole={openConsole}
+        onGeoCache={handleOpenGeoCache}
         onCancel={handleCancel}
         onHistory={handleOpenHistory}
         onAddToHistory={handleAddToHistory}
@@ -1215,6 +1271,17 @@ const App = () => {
         onLoad={handleLoadHistory}
         onDelete={handleDeleteHistory}
         onClear={handleClearHistory}
+      />
+
+      <GeoCacheModal
+        open={geocacheOpen}
+        entries={geocacheEntries}
+        info={geocacheInfo}
+        loading={geocacheLoading}
+        onClose={() => setGeocacheOpen(false)}
+        onRefresh={() => void refreshGeoCache()}
+        onDelete={handleDeleteGeoCacheEntry}
+        onClear={handleClearGeoCache}
       />
 
       <MissingToolModal

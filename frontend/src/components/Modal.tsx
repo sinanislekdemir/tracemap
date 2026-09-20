@@ -25,6 +25,7 @@ const VARIANT_WIDTHS: Record<string, number> = {
   'modal--ports': 680,
   'modal--domain': 760,
   'modal--tool': 540,
+  'modal--geocache': 720,
 };
 
 // Modal dialogs behave like the floating terminal windows: draggable,

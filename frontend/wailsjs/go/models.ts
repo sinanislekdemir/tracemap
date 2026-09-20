@@ -221,6 +221,48 @@ export namespace domaincheck {
 
 export namespace geolocator {
 	
+	export class CacheEntry {
+	    ip: string;
+	    lat: number;
+	    lon: number;
+	    city: string;
+	    country: string;
+	    asn: string;
+	    fetchedAt: number;
+	    expired: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CacheEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ip = source["ip"];
+	        this.lat = source["lat"];
+	        this.lon = source["lon"];
+	        this.city = source["city"];
+	        this.country = source["country"];
+	        this.asn = source["asn"];
+	        this.fetchedAt = source["fetchedAt"];
+	        this.expired = source["expired"];
+	    }
+	}
+	export class CacheInfo {
+	    enabled: boolean;
+	    path: string;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CacheInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.path = source["path"];
+	        this.count = source["count"];
+	    }
+	}
 	export class GeoData {
 	    lat: number;
 	    lon: number;

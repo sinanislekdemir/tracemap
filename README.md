@@ -17,6 +17,10 @@ React + TypeScript frontend, packaged as a single native binary.
 ## Screenshots
 I keep changing the UI, therefore I can't put screenshots for every feature.
 This shall give you an impresssion:
+<img width="1308" height="912" alt="Screenshot_20260921_210128" src="https://github.com/user-attachments/assets/a5b162f6-1289-42e3-9016-faeb8f1677f1" />
+<img width="1308" height="912" alt="Screenshot_20260921_210137" src="https://github.com/user-attachments/assets/5b55dff8-abc7-41c6-b0ea-fae37e1e923e" />
+<img width="1308" height="912" alt="Screenshot_20260921_210157" src="https://github.com/user-attachments/assets/43f6d600-a4e9-4739-9d46-cbb318773f40" />
+
 <img width="3440" height="1394" alt="Screenshot_20260921_205919" src="https://github.com/user-attachments/assets/4a6c748c-1a0e-4d1e-88f0-cc150be96804" />
 
 

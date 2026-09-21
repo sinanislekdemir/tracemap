@@ -20,6 +20,7 @@ import { EventsOff, EventsOn } from '../wailsjs/runtime/runtime';
 import { main } from '../wailsjs/go/models';
 import CheatsheetPanel from './components/CheatsheetPanel';
 import ContextMenu from './components/ContextMenu';
+import CorrelationList from './components/CorrelationList';
 import DomainAnalysisModal from './components/DomainAnalysisModal';
 import FloatingWindow from './components/FloatingWindow';
 import GeoCacheModal from './components/GeoCacheModal';
@@ -40,6 +41,8 @@ import { useFloatingWindows } from './useFloatingWindows';
 import { useSplitter } from './useSplitter';
 import { applyTheme, loadTheme } from './theme';
 import type { Theme } from './theme';
+import { applyMotion, loadMotion } from './motion';
+import type { Motion } from './motion';
 import { findCheatsheet } from './cheatsheets';
 import { TRACE_COLORS } from './colors';
 import { buildDisplayHops, isLocated } from './traces';
@@ -61,6 +64,7 @@ import {
   EVENT_TARGET_GEO,
 } from './events';
 import type {
+  CorrelatedHop,
   CrawlPage,
   CrawlLogEvent,
   CrawlResult,
@@ -72,6 +76,7 @@ import type {
   GeoEvent,
   HistoryEntry,
   HistorySummary,
+  HopData,
   HopEvent,
   LogLevel,
   LogLine,
@@ -105,6 +110,7 @@ const SCAN_PHASE_LABELS: Record<string, string> = {
 
 const App = () => {
   const [theme, setTheme] = useState<Theme>(loadTheme);
+  const [motion, setMotion] = useState<Motion>(loadMotion);
   const [target, setTarget] = useState('example.com');
   const [maxHops, setMaxHops] = useState(30);
   const [isLoading, setIsLoading] = useState(false);
@@ -130,7 +136,7 @@ const App = () => {
   const [geocacheEntries, setGeocacheEntries] = useState<GeoCacheEntry[]>([]);
   const [geocacheInfo, setGeocacheInfo] = useState<GeoCacheInfo | null>(null);
   const [geocacheLoading, setGeocacheLoading] = useState(false);
-  const [viewMode, setViewMode] = useState<'live' | 'history'>('live');
+  const [viewMode, setViewMode] = useState<'live' | 'history' | 'correlate'>('live');
   const [toast, setToast] = useState<string | null>(null);
   const [toolError, setToolError] = useState<{ message: string; hint: string } | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
@@ -255,8 +261,16 @@ const App = () => {
     applyTheme(theme);
   }, [theme]);
 
+  useEffect(() => {
+    applyMotion(motion);
+  }, [motion]);
+
   const toggleTheme = useCallback(() => {
     setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
+  }, []);
+
+  const toggleMotion = useCallback(() => {
+    setMotion((current) => (current === 'on' ? 'off' : 'on'));
   }, []);
 
   useEffect(() => {
@@ -775,8 +789,8 @@ const App = () => {
       });
   }, [historyOpen, lastTarget, maxHops, mode, refreshHistory, showToast, traces]);
 
-  const handleLoadHistory = useCallback(
-    (ids: number[]) => {
+  const loadHistory = useCallback(
+    (ids: number[], nextMode: 'history' | 'correlate') => {
       if (ids.length === 0) {
         return;
       }
@@ -815,15 +829,31 @@ const App = () => {
           setSelectedTraces(new Set());
           setFocusedTrace(loaded[0].id);
           setSelectedHop(null);
-          setViewMode('history');
+          setViewMode(nextMode);
           setHistoryOpen(false);
-          appendLog('info', `history · loaded ${loaded.length} ${loaded.length === 1 ? 'path' : 'paths'}`, 'console');
+          appendLog(
+            'info',
+            nextMode === 'correlate'
+              ? `correlate · ${loaded.length} ${loaded.length === 1 ? 'path' : 'paths'}`
+              : `history · loaded ${loaded.length} ${loaded.length === 1 ? 'path' : 'paths'}`,
+            'console',
+          );
         })
         .catch((err: unknown) => {
           showToast(err instanceof Error ? err.message : 'Could not load history');
         });
     },
     [appendLog, clearDiscovery, showToast],
+  );
+
+  const handleLoadHistory = useCallback(
+    (ids: number[]) => loadHistory(ids, 'history'),
+    [loadHistory],
+  );
+
+  const handleCorrelate = useCallback(
+    (ids: number[]) => loadHistory(ids, 'correlate'),
+    [loadHistory],
   );
 
   const handleDeleteHistory = useCallback(
@@ -883,6 +913,62 @@ const App = () => {
     }
     return shared;
   }, [traces]);
+
+  // Correlation mode works on the visible selection: toggling paths in the
+  // legend or the targets list narrows the correlation without leaving the view.
+  const visibleTraces = useMemo(
+    () => (selectedTraces.size === 0 ? traces : traces.filter((trace) => selectedTraces.has(trace.id))),
+    [selectedTraces, traces],
+  );
+
+  // Deduplicate located hops across the visible paths so every address is drawn
+  // once, tagged with how many times the paths revisit it. Only located hops can
+  // be placed on the map, so unlocated hops are dropped from the correlation.
+  const correlatedHops = useMemo(() => {
+    if (viewMode !== 'correlate') {
+      return [];
+    }
+    const byIp = new Map<string, CorrelatedHop>();
+    for (const trace of visibleTraces) {
+      const hops = buildDisplayHops(trace);
+      const visits = new Map<string, number>();
+      const located = new Map<string, HopData>();
+      for (const hop of hops) {
+        if (!hop.ip) {
+          continue;
+        }
+        visits.set(hop.ip, (visits.get(hop.ip) ?? 0) + 1);
+        if (!located.has(hop.ip) && isLocated(hop) && hop.geo) {
+          located.set(hop.ip, hop);
+        }
+      }
+      for (const [ip, times] of visits) {
+        const source = located.get(ip);
+        if (!source || !source.geo) {
+          continue;
+        }
+        const entry = byIp.get(ip) ?? {
+          ip,
+          count: 0,
+          paths: 0,
+          geo: source.geo,
+          isTarget: false,
+          position: [source.geo.lat, source.geo.lon] as [number, number],
+          labels: [],
+        };
+        entry.count += times;
+        entry.paths += 1;
+        entry.labels.push(trace.label);
+        if (!entry.isTarget && hops.some((hop) => hop.ip === ip && hop.isTarget)) {
+          entry.isTarget = true;
+        }
+        byIp.set(ip, entry);
+      }
+    }
+    return [...byIp.values()].sort(
+      (a, b) => b.count - a.count || b.paths - a.paths || a.ip.localeCompare(b.ip),
+    );
+  }, [viewMode, visibleTraces]);
 
   // Resolved target addresses available to the port scanner's "all targets"
   // scope, deduped by address and keeping the trace's label.
@@ -995,11 +1081,13 @@ const App = () => {
           ? `${phaseLabel} ${scanProgress.done}/${scanProgress.total} · ${scanProgress.found} found`
           : `${phaseLabel}…`
         : `${mode === 'scan' ? 'scanning' : 'probing'} ${lastTarget}…`
-      : viewMode === 'history'
-        ? `${traces.length} saved ${traces.length === 1 ? 'path' : 'paths'}`
-        : traces.length > 0
-          ? lastTarget
-          : '';
+      : viewMode === 'correlate'
+        ? `${correlatedHops.length} unique hops · ${traces.length} paths`
+        : viewMode === 'history'
+          ? `${traces.length} saved ${traces.length === 1 ? 'path' : 'paths'}`
+          : traces.length > 0
+            ? lastTarget
+            : '';
 
   return (
     <div
@@ -1013,10 +1101,12 @@ const App = () => {
           <span className="brand-sub">/ NETWORK CONSOLE</span>
         </div>
         <div className="appbar-meta">
-          {viewMode === 'history' ? (
+          {viewMode !== 'live' ? (
             <>
               <span className="appbar-history">
-                HISTORY · {traces.length} paths{sharedHops.size > 0 ? ` · ${sharedHops.size} shared` : ''}
+                {viewMode === 'correlate'
+                  ? `CORRELATE · ${traces.length} paths · ${correlatedHops.length} unique`
+                  : `HISTORY · ${traces.length} paths${sharedHops.size > 0 ? ` · ${sharedHops.size} shared` : ''}`}
               </span>
               <button type="button" className="appbar-exit" onClick={handleExitHistoryView}>
                 EXIT
@@ -1090,26 +1180,49 @@ const App = () => {
             </>
           )}
 
-          <div className="pane-head">
-            <span className="pane-title">{activeTrace ? activeTrace.label : 'HOPS'}</span>
-            <span className="pane-count">{displayHops.length}</span>
-          </div>
-          <div className="hop-scroll">
-            <HopList
-              hops={displayHops}
-              selectedHop={selectedHop}
-              onSelectHop={setSelectedHop}
-              onContextMenu={(event, hop) => {
-                if (!hop.ip) {
-                  return;
-                }
-                event.preventDefault();
-                event.stopPropagation();
-                openContextMenu(event.clientX, event.clientY, hop.ip, hop.isTarget ? 'target' : `hop ${hop.hop}`);
-              }}
-              sharedHops={sharedHops}
-            />
-          </div>
+          {viewMode === 'correlate' ? (
+            <>
+              <div className="pane-head">
+                <span className="pane-title">CORRELATION</span>
+                <span className="pane-count">{correlatedHops.length}</span>
+              </div>
+              <div className="hop-scroll">
+                <CorrelationList
+                  hops={correlatedHops}
+                  selectedIndex={selectedHop}
+                  onSelect={setSelectedHop}
+                  onContextMenu={(event, hop) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openContextMenu(event.clientX, event.clientY, hop.ip, hop.isTarget ? 'target' : `hop ×${hop.count}`);
+                  }}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="pane-head">
+                <span className="pane-title">{activeTrace ? activeTrace.label : 'HOPS'}</span>
+                <span className="pane-count">{displayHops.length}</span>
+              </div>
+              <div className="hop-scroll">
+                <HopList
+                  hops={displayHops}
+                  selectedHop={selectedHop}
+                  onSelectHop={setSelectedHop}
+                  onContextMenu={(event, hop) => {
+                    if (!hop.ip) {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openContextMenu(event.clientX, event.clientY, hop.ip, hop.isTarget ? 'target' : `hop ${hop.hop}`);
+                  }}
+                  sharedHops={sharedHops}
+                />
+              </div>
+            </>
+          )}
         </aside>
         )}
 
@@ -1134,6 +1247,8 @@ const App = () => {
           sharedHops={sharedHops}
           origins={originMarkers}
           theme={theme}
+          correlate={viewMode === 'correlate'}
+          correlated={correlatedHops}
         />
 
         {hasDiscovery && (
@@ -1284,6 +1399,8 @@ const App = () => {
         elapsedMs={elapsedMs}
         theme={theme}
         onToggleTheme={toggleTheme}
+        motion={motion}
+        onToggleMotion={toggleMotion}
       />
 
       <HistoryModal
@@ -1293,6 +1410,7 @@ const App = () => {
         disabled={historyDisabled}
         onClose={() => setHistoryOpen(false)}
         onLoad={handleLoadHistory}
+        onCorrelate={handleCorrelate}
         onDelete={handleDeleteHistory}
         onClear={handleClearHistory}
       />

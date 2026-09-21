@@ -6,8 +6,10 @@ import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
 import GlobalErrorBridge from './components/GlobalErrorBridge';
 import { applyTheme, loadTheme } from './theme';
+import { applyMotion, loadMotion } from './motion';
 
 applyTheme(loadTheme());
+applyMotion(loadMotion());
 
 const container = document.getElementById('root');
 if (!container) {

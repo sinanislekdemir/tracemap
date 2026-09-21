@@ -10,6 +10,8 @@ interface StatusBarProps {
   elapsedMs: number;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
+  motion: 'on' | 'off';
+  onToggleMotion: () => void;
 }
 
 function formatElapsed(ms: number): string {
@@ -31,7 +33,7 @@ const LABELS: Record<StatusBarProps['state'], string> = {
   error: 'ERROR',
 };
 
-const StatusBar = ({ state, message, progress, targets, hops, located, elapsedMs, theme, onToggleTheme }: StatusBarProps) => {
+const StatusBar = ({ state, message, progress, targets, hops, located, elapsedMs, theme, onToggleTheme, motion, onToggleMotion }: StatusBarProps) => {
   const done = progress?.done ?? 0;
   const total = progress?.total ?? 0;
   const showProgress = total > 0;
@@ -70,6 +72,19 @@ const StatusBar = ({ state, message, progress, targets, hops, located, elapsedMs
         <span className="stat">
           TIME <b>{formatElapsed(elapsedMs)}</b>
         </span>
+        <button
+          type="button"
+          className="motion-toggle"
+          onClick={onToggleMotion}
+          title={`${motion === 'on' ? 'Disable' : 'Enable'} trace line animations`}
+          aria-label={`${motion === 'on' ? 'Disable' : 'Enable'} trace line animations`}
+          aria-pressed={motion === 'on'}
+        >
+          <span className="theme-toggle-track" data-motion={motion}>
+            <i />
+          </span>
+          {motion === 'on' ? 'ANIM' : 'STATIC'}
+        </button>
         <button
           type="button"
           className="theme-toggle"

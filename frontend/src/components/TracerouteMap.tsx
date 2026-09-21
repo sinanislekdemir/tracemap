@@ -13,11 +13,12 @@ import {
 import { divIcon } from 'leaflet';
 import type { LatLngBoundsExpression, LatLngExpression } from 'leaflet';
 import { buildDisplayHops, isLocated } from '../traces';
+import { correlationColor } from '../colors';
 import { formatCoords } from '../format';
 import OsmLink from './OsmLink';
 import cities from '../assets/cities.json';
 import { countries, land } from '../world';
-import type { HopData, OriginMarker, TraceState } from '../types';
+import type { CorrelatedHop, HopData, OriginMarker, TraceState } from '../types';
 
 interface TracerouteMapProps {
   traces: TraceState[];
@@ -30,6 +31,9 @@ interface TracerouteMapProps {
   sharedHops?: Map<string, number>;
   origins?: OriginMarker[];
   theme: 'dark' | 'light';
+  /** Correlation mode: draw deduplicated hops instead of per-trace routes. */
+  correlate?: boolean;
+  correlated?: CorrelatedHop[];
 }
 
 const DEFAULT_CENTER: LatLngExpression = [25, 10];
@@ -204,6 +208,8 @@ const TracerouteMap = ({
   sharedHops,
   origins,
   theme,
+  correlate = false,
+  correlated,
 }: TracerouteMapProps) => {
   const mapColors = MAP_COLORS[theme];
   const landStyle = {
@@ -221,6 +227,8 @@ const TracerouteMap = ({
   const [legendOpen, setLegendOpen] = useState(true);
   const visible = selectedTraces.size === 0 ? traces : traces.filter((trace) => selectedTraces.has(trace.id));
 
+  const correlatedHops = correlated ?? [];
+
   const rendered: Rendered[] = visible.map((trace) => {
     const hops = buildDisplayHops(trace);
     const located = locate(hops);
@@ -229,12 +237,19 @@ const TracerouteMap = ({
   });
 
   const originCoords = (origins ?? []).map((origin) => [origin.lat, origin.lon] as Coord);
-  const allCoords = [...rendered.flatMap((entry) => entry.coords), ...originCoords];
+  const allCoords = correlate
+    ? [...correlatedHops.map((hop) => hop.position as Coord), ...originCoords]
+    : [...rendered.flatMap((entry) => entry.coords), ...originCoords];
   const totalHops = rendered.reduce((sum, entry) => sum + entry.hops.length, 0);
   const totalLocated = rendered.reduce((sum, entry) => sum + entry.located.length, 0);
+  const totalVisits = correlatedHops.reduce((sum, hop) => sum + hop.count, 0);
 
   const activeRendered = rendered.find((entry) => entry.trace.id === focusedTrace) ?? rendered[0];
-  const focus = activeRendered?.located.find((entry) => entry.hop.hop === selectedHop)?.position ?? null;
+  const focus = correlate
+    ? selectedHop != null
+      ? correlatedHops[selectedHop]?.position ?? null
+      : null
+    : activeRendered?.located.find((entry) => entry.hop.hop === selectedHop)?.position ?? null;
 
   return (
     <div className="map-wrap">
@@ -263,7 +278,8 @@ const TracerouteMap = ({
           <CityLayer key={`cities:${theme}`} dotColor={mapColors.dot} />
           <ScaleControl position="bottomleft" imperial={false} />
 
-          {rendered.map(({ trace, located, route }) => {
+          {!correlate &&
+            rendered.map(({ trace, located, route }) => {
             const hasTarget = located.some((entry) => entry.hop.isTarget);
             return (
               <Fragment key={trace.id}>
@@ -366,6 +382,71 @@ const TracerouteMap = ({
             );
           })}
 
+          {correlate &&
+            correlatedHops.map((hop, index) => {
+              const color = correlationColor(hop.count);
+              const radius = 4 + Math.min(hop.count - 1, 6) * 1.4;
+              return (
+                <CircleMarker
+                  key={`corr:${hop.ip}`}
+                  center={hop.position}
+                  radius={radius}
+                  className={`corr-dot${selectedHop === index ? ' corr-dot--selected' : ''}${hop.isTarget ? ' corr-dot--target' : ''}`}
+                  pathOptions={{
+                    color,
+                    fillColor: color,
+                    fillOpacity: hop.count > 1 ? 0.85 : 0.5,
+                    opacity: 1,
+                    weight: hop.isTarget ? 3 : 2,
+                  }}
+                  eventHandlers={{
+                    click: () => onSelectHop(index),
+                    contextmenu: (event) => {
+                      event.originalEvent.preventDefault();
+                      event.originalEvent.stopPropagation();
+                      onContextMenu?.(
+                        hop.ip,
+                        hop.isTarget ? 'target' : `hop ×${hop.count}`,
+                        event.originalEvent.clientX,
+                        event.originalEvent.clientY,
+                      );
+                    },
+                  }}
+                >
+                  {hop.count > 1 ? (
+                    <Tooltip permanent direction="right" offset={[radius, 0]} className="corr-label">
+                      ×{hop.count}
+                    </Tooltip>
+                  ) : null}
+                  <Popup>
+                    <b>{hop.isTarget ? 'TARGET' : 'CORRELATED HOP'}</b>
+                    <br />
+                    {hop.ip}
+                    <br />
+                    REVISITS&nbsp;×{hop.count} on {hop.paths} {hop.paths === 1 ? 'path' : 'paths'}
+                    <br />
+                    LOC&nbsp;{hop.geo?.city || 'unknown'}
+                    {hop.geo?.country ? ` (${hop.geo.country})` : ''}
+                    <br />
+                    ASN&nbsp;{hop.geo?.asn || 'unknown'}
+                    {hop.geo ? (
+                      <>
+                        <br />
+                        <OsmLink className="popup-osm" lat={hop.geo.lat} lon={hop.geo.lon} />
+                      </>
+                    ) : null}
+                    {hop.labels.length > 0 ? (
+                      <>
+                        <br />
+                        PATHS&nbsp;{hop.labels.slice(0, 4).join(', ')}
+                        {hop.labels.length > 4 ? ` +${hop.labels.length - 4}` : ''}
+                      </>
+                    ) : null}
+                  </Popup>
+                </CircleMarker>
+              );
+            })}
+
           {(origins ?? []).map((origin) => (
             <Marker key={`origin:${origin.ip}`} position={[origin.lat, origin.lon]} icon={originIcon}>
               <Popup>
@@ -411,16 +492,26 @@ const TracerouteMap = ({
                   </button>
                 ))}
               </div>
-              <div className="legend-hint">filled = endpoint · hollow = hop</div>
+              <div className="legend-hint">
+                {correlate ? 'dot size + label = revisits' : 'filled = endpoint · hollow = hop'}
+              </div>
             </>
           )}
         </div>
 
         <div className="map-hud">
-          <b>{totalLocated}</b>/{totalHops} LOCATED
-          {sharedHops && sharedHops.size > 0 ? (
-            <span className="map-hud-shared"> · {sharedHops.size} SHARED</span>
-          ) : null}
+          {correlate ? (
+            <>
+              <b>{correlatedHops.length}</b> UNIQUE · <b>{totalVisits}</b> VISITS
+            </>
+          ) : (
+            <>
+              <b>{totalLocated}</b>/{totalHops} LOCATED
+              {sharedHops && sharedHops.size > 0 ? (
+                <span className="map-hud-shared"> · {sharedHops.size} SHARED</span>
+              ) : null}
+            </>
+          )}
           {origins && origins.length > 0 ? (
             <span className="map-hud-origin"> · {origins.length} ORIGIN</span>
           ) : null}

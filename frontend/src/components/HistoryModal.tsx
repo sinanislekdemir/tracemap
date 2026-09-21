@@ -9,6 +9,7 @@ interface HistoryModalProps {
   disabled: boolean;
   onClose: () => void;
   onLoad: (ids: number[]) => void;
+  onCorrelate: (ids: number[]) => void;
   onDelete: (id: number) => void;
   onClear: () => void;
 }
@@ -34,6 +35,7 @@ const HistoryModal = ({
   disabled,
   onClose,
   onLoad,
+  onCorrelate,
   onDelete,
   onClear,
 }: HistoryModalProps) => {
@@ -99,6 +101,15 @@ const HistoryModal = ({
             onClick={() => onLoad(selectedIds)}
           >
             Show {selected.size > 0 ? `${selected.size} ` : ''}on map
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={selected.size === 0}
+            title="Aggregate the selected paths and draw each hop once"
+            onClick={() => onCorrelate(selectedIds)}
+          >
+            Correlate
           </button>
         </>
       }

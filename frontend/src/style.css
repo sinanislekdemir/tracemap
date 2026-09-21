@@ -820,6 +820,22 @@ body {
   }
 }
 
+/* Motion off (footer toggle): freeze the trace dash/ping loops. The blurred
+   glow is the most expensive layer to repaint, so its filter is dropped and it
+   becomes a plain faint halo behind the line. */
+[data-motion='off'] .route-line,
+[data-motion='off'] .route-glow,
+[data-motion='off'] .hop-dot--dest {
+  animation: none;
+}
+[data-motion='off'] .route-glow {
+  filter: none;
+  opacity: 0.22;
+}
+[data-theme='light'][data-motion='off'] .route-glow {
+  filter: brightness(0.72) saturate(1.5);
+}
+
 /* leaflet chrome, themed */
 .leaflet-control-zoom {
   border: 1px solid var(--border-strong) !important;
@@ -1542,7 +1558,8 @@ body {
   font-weight: 600;
 }
 
-.theme-toggle {
+.theme-toggle,
+.motion-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1556,7 +1573,8 @@ body {
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s;
 }
-.theme-toggle:hover {
+.theme-toggle:hover,
+.motion-toggle:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -1582,6 +1600,10 @@ body {
 .theme-toggle-track[data-theme='light'] i {
   transform: translateX(12px);
   background: var(--accent);
+}
+.theme-toggle-track[data-motion='on'] i {
+  transform: translateX(12px);
+  background: var(--ok);
 }
 
 /* ---------- animations ---------- */
@@ -1656,6 +1678,65 @@ body {
 }
 .map-hud-shared {
   color: #c4b5fd;
+}
+
+/* ---------- correlation mode ---------- */
+
+.corr-dot {
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.35));
+}
+.corr-dot--selected {
+  stroke: #ffffff;
+  stroke-width: 2.5;
+}
+.corr-dot--target {
+  filter: drop-shadow(0 0 5px rgba(255, 107, 107, 0.6));
+}
+.corr-label {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0 0 0 2px;
+  margin: 0;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 2px var(--city-shadow);
+  white-space: nowrap;
+}
+.corr-label::before {
+  display: none;
+}
+
+.hop--corr {
+  grid-template-columns: 44px 1fr auto auto;
+}
+.corr-count {
+  justify-self: center;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.corr-paths {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.corr-paths i {
+  font-style: normal;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
 }
 
 /* ---------- history modal ---------- */

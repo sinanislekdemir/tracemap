@@ -16,6 +16,19 @@ export interface HopData {
   sharedCount?: number;
 }
 
+/** One deduplicated hop across the correlated paths (correlation mode). */
+export interface CorrelatedHop {
+  ip: string;
+  /** Total appearances across the paths, revisits included. */
+  count: number;
+  /** Number of distinct paths the hop appears in. */
+  paths: number;
+  geo?: GeoData;
+  isTarget?: boolean;
+  position: [number, number];
+  labels: string[];
+}
+
 export interface HopEvent {
   target: number;
   hop: number;

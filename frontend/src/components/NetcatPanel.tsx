@@ -22,7 +22,8 @@ interface Entry {
 }
 
 interface NetcatPanelProps {
-  request: { host: string; nonce: number } | null;
+  /** Preloads the form; port/tls come from a port-scan hit when available. */
+  request: { host: string; port?: number; tls?: boolean; nonce: number } | null;
   onLog: (level: LogLevel, text: string) => void;
   onOpenCheatsheet: (sheetId: string) => void;
 }
@@ -81,6 +82,7 @@ const NetcatPanel = ({ request, onLog, onOpenCheatsheet }: NetcatPanelProps) => 
   const hostRef = useRef<HTMLInputElement>(null);
   const portRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const connectRef = useRef<HTMLButtonElement>(null);
 
   const append = (kind: EntryKind, text: string) => {
     setEntries((previous) => {
@@ -143,7 +145,15 @@ const NetcatPanel = ({ request, onLog, onOpenCheatsheet }: NetcatPanelProps) => 
       return;
     }
     setHost(request.host);
-    if (request.host && !port) {
+    if (request.port != null) {
+      setPort(String(request.port));
+    }
+    if (request.tls != null) {
+      setTls(request.tls);
+    }
+    if (request.host && request.port != null) {
+      connectRef.current?.focus();
+    } else if (request.host) {
       portRef.current?.focus();
     } else {
       hostRef.current?.focus();
@@ -241,6 +251,13 @@ const NetcatPanel = ({ request, onLog, onOpenCheatsheet }: NetcatPanelProps) => 
     }
   };
 
+  const onFieldKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void connect();
+    }
+  };
+
   const connected = status === 'connected' && sessionId != null;
   const statusLabel =
     status === 'idle'
@@ -266,6 +283,7 @@ const NetcatPanel = ({ request, onLog, onOpenCheatsheet }: NetcatPanelProps) => 
             placeholder="hostname or IP"
             disabled={connected}
             onChange={(event) => setHost(event.target.value)}
+            onKeyDown={onFieldKeyDown}
           />
         </div>
         <input
@@ -278,6 +296,7 @@ const NetcatPanel = ({ request, onLog, onOpenCheatsheet }: NetcatPanelProps) => 
           placeholder="port"
           disabled={connected}
           onChange={(event) => setPort(event.target.value)}
+          onKeyDown={onFieldKeyDown}
         />
         <label className="netcat-check" title="Wrap the connection in a TLS handshake">
           <input
@@ -319,7 +338,13 @@ const NetcatPanel = ({ request, onLog, onOpenCheatsheet }: NetcatPanelProps) => 
             Disconnect
           </button>
         ) : (
-          <button type="button" className="btn btn--primary" onClick={connect} disabled={status === 'connecting'}>
+          <button
+            ref={connectRef}
+            type="button"
+            className="btn btn--primary"
+            onClick={connect}
+            disabled={status === 'connecting'}
+          >
             Connect
           </button>
         )}

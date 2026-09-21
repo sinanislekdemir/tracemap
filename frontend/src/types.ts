@@ -246,8 +246,10 @@ export interface FloatingWindowState {
   width: number;
   height: number;
   z: number;
-  /** Netcat windows carry the host to connect to. */
+  /** Netcat windows carry the host/port/TLS to preload the connection form. */
   host?: string;
+  port?: number;
+  tls?: boolean;
   nonce?: number;
   /** Cheatsheet windows carry the protocol sheet id to render. */
   sheet?: string;

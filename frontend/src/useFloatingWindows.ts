@@ -5,6 +5,9 @@ import type { FloatingWindowState, TerminalKind } from './types';
 interface OpenOptions {
   title?: string;
   host?: string;
+  /** Netcat windows preload the connection form with these. */
+  port?: number;
+  tls?: boolean;
   /** Cheatsheet protocol id; makes cheatsheet windows singleton per sheet. */
   sheet?: string;
   /** Singleton windows focus the existing window of the same kind. */
@@ -53,6 +56,7 @@ export function useFloatingWindows() {
 
   const open = useCallback(
     (kind: TerminalKind, options: OpenOptions = {}) => {
+      // Netcat is deliberately non-singleton: every session gets its own window.
       const singleton = options.singleton ?? kind !== 'netcat';
       if (singleton) {
         const existing = windowsRef.current.find(
@@ -86,6 +90,8 @@ export function useFloatingWindows() {
         height,
         z: nextZ(),
         host: options.host,
+        port: options.port,
+        tls: options.tls,
         nonce: options.host ? Date.now() : undefined,
         sheet: options.sheet,
       };

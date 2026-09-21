@@ -2584,6 +2584,21 @@ body {
   font-family: var(--mono);
   font-size: 12px;
 }
+.port-num--link {
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.port-num--link:hover {
+  text-decoration: underline;
+}
+.port-num--link:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 .port-proto {
   color: var(--text-faint);
   font-family: var(--mono);

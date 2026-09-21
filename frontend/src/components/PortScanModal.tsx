@@ -122,9 +122,11 @@ interface PortScanModalProps {
   targets: PortScanTarget[];
   onClose: () => void;
   onLog: (level: LogLevel, text: string) => void;
+  /** Open the netcat tool preloaded with an open port. */
+  onConnect: (host: string, port: number, tls?: boolean) => void;
 }
 
-const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanModalProps) => {
+const PortScanModal = ({ open, host, label, targets, onClose, onLog, onConnect }: PortScanModalProps) => {
   const [options, setOptions] = useState<PortScanOptions>(DEFAULT_OPTIONS);
   const [phase, setPhase] = useState<Phase>('options');
   const [results, setResults] = useState<PortOpenEvent[]>([]);
@@ -724,7 +726,16 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog }: PortScanM
                           ) : (
                             group.rows.map((entry) => (
                               <div className="port-row" key={`${entry.host}:${entry.result.port}/${entry.result.protocol}`}>
-                                <span className="port-num">{entry.result.port}</span>
+                                <button
+                                  type="button"
+                                  className="port-num port-num--link"
+                                  title={`Open ${entry.host}:${entry.result.port} in netcat`}
+                                  onClick={() =>
+                                    onConnect(entry.host, entry.result.port, entry.result.tls ?? false)
+                                  }
+                                >
+                                  {entry.result.port}
+                                </button>
                                 <span className="port-proto">{entry.result.protocol}</span>
                                 <span className="port-service">{entry.result.service || '—'}</span>
                                 <span className="port-ident">

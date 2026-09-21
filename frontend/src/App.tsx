@@ -933,8 +933,14 @@ const App = () => {
   });
 
   const openNetcat = useCallback(
-    (host: string) => {
-      openWindow('netcat', { title: host ? `NETCAT · ${host}` : 'NETCAT', host });
+    (host: string, port?: number, tls?: boolean) => {
+      const endpoint = host && port != null ? `${host}:${port}` : host;
+      openWindow('netcat', {
+        title: endpoint ? `NETCAT · ${endpoint}` : 'NETCAT',
+        host,
+        port,
+        tls,
+      });
     },
     [openWindow],
   );
@@ -1221,7 +1227,11 @@ const App = () => {
                 headerExtra={<span className="fw-hint">{win.host ?? 'session'}</span>}
               >
                 <NetcatPanel
-                  request={win.host ? { host: win.host, nonce: win.nonce ?? 0 } : null}
+                  request={
+                    win.host
+                      ? { host: win.host, port: win.port, tls: win.tls, nonce: win.nonce ?? 0 }
+                      : null
+                  }
                   onLog={appendNetcatLog}
                   onOpenCheatsheet={openCheatsheet}
                 />
@@ -1322,6 +1332,7 @@ const App = () => {
         targets={portScanTargets}
         onClose={() => setPortScan(null)}
         onLog={appendPortLog}
+        onConnect={(host, port, tls) => openNetcat(host, port, tls)}
       />
 
       <DomainAnalysisModal

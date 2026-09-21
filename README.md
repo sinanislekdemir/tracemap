@@ -17,10 +17,7 @@ React + TypeScript frontend, packaged as a single native binary.
 ## Screenshots
 I keep changing the UI, therefore I can't put screenshots for every feature.
 This shall give you an impresssion:
-<img width="3440" height="1394" alt="Screenshot_20260921_205608" src="https://github.com/user-attachments/assets/8cf78e9a-c992-494d-b2d6-c7e64a39c538" />
-
-<img width="1661" height="994" alt="Screenshot_20260920_142015" src="https://github.com/user-attachments/assets/a64658d4-770e-496c-bd27-a44885a5317c" />
-<img width="1661" height="994" alt="Screenshot_20260920_141953" src="https://github.com/user-attachments/assets/1d659505-fccc-4c46-8209-c41a0ae89285" />
+<img width="3440" height="1394" alt="Screenshot_20260921_205919" src="https://github.com/user-attachments/assets/4a6c748c-1a0e-4d1e-88f0-cc150be96804" />
 
 
 *Loading several saved traces at once; hops shared by two or more paths are

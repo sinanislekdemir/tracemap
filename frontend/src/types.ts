@@ -139,6 +139,12 @@ export interface CrawlLogEvent {
   message: string;
 }
 
+/** A verbose step from IPv4 CIDR block discovery. */
+export interface BlockLogEvent {
+  level: LogLevel;
+  message: string;
+}
+
 export interface SubdomainResult {
   name: string;
   source: string;

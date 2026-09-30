@@ -11,6 +11,7 @@ import {
   EVENT_PORT_OPEN,
   EVENT_PORT_PROGRESS,
 } from '../events';
+import { parseCIDR } from '../cidr';
 import type {
   LogLevel,
   LogLine,
@@ -135,6 +136,13 @@ interface PortScanModalProps {
   label?: string;
   /** Resolved scan targets available for the "all targets" scope. */
   targets: PortScanTarget[];
+  /**
+   * When set, the modal runs in block mode: it skips the options screen and
+   * port-scans every usable address in this IPv4 CIDR block (top 100 ports).
+   */
+  cidr?: string;
+  /** Start the scan as soon as the modal opens (used for CIDR blocks). */
+  autoStart?: boolean;
   onClose: () => void;
   onLog: (level: LogLevel, text: string) => void;
   /** Open the netcat tool preloaded with an open port. */
@@ -150,12 +158,20 @@ const PortScanModal = ({
   host,
   label,
   targets,
+  cidr,
+  autoStart,
   onClose,
   onLog,
   onConnect,
   onResultsChange,
   onAnalyzeHttp,
 }: PortScanModalProps) => {
+  const blockMode = Boolean(cidr);
+  const blockOptions = useMemo<PortScanOptions>(
+    () => ({ ...DEFAULT_OPTIONS, preset: 'top100', scope: 'single' }),
+    [],
+  );
+  const blockHosts = useMemo(() => parseCIDR(cidr ?? '')?.count ?? 0, [cidr]);
   const [options, setOptions] = useState<PortScanOptions>(DEFAULT_OPTIONS);
   const [phase, setPhase] = useState<Phase>('options');
   const [results, setResults] = useState<PortOpenEvent[]>([]);
@@ -185,11 +201,61 @@ const PortScanModal = ({
     [onLog],
   );
 
+  // runScan starts a port scan for the given options. A scanCidr switches to
+  // block mode, where the backend expands the IPv4 block itself.
+  const runScan = useCallback(
+    (scanOptions: PortScanOptions, scanCidr?: string) => {
+      const block = Boolean(scanCidr);
+      const scopeAll = !block && scanOptions.scope === 'all' && targets.length > 1;
+      startedAtRef.current = Date.now();
+      durationRef.current = 0;
+      setResults([]);
+      setProgress(null);
+      setDone(null);
+      setError(null);
+      setLogs([]);
+      setFilter('');
+      setShowActivity(false);
+      setPhase('scanning');
+      const portSummary =
+        scanOptions.preset === 'custom'
+          ? `${scanOptions.portRange} · ${countPorts(scanOptions.portRange)} ports`
+          : PRESETS.find((preset) => preset.id === scanOptions.preset)?.label ?? scanOptions.preset;
+      const scopeLabel = block
+        ? `${scanCidr} · ${blockHosts} addresses`
+        : scopeAll
+          ? `${targets.length} targets`
+          : host;
+      pushLog('info', `▶ portscan ${scopeLabel} · ${scanOptions.protocol} · ${portSummary}`);
+      ScanPorts(
+        main.PortScanRequest.createFrom({
+          host: !block && !scopeAll ? host : '',
+          cidr: scanCidr ?? '',
+          targets: scopeAll
+            ? targets.map((target) => main.PortScanTarget.createFrom({ label: target.label, host: target.host }))
+            : [],
+          protocol: scanOptions.protocol,
+          preset: scanOptions.preset === 'custom' ? '' : scanOptions.preset,
+          portRange: scanOptions.preset === 'custom' ? scanOptions.portRange : '',
+          concurrency: scanOptions.concurrency,
+          timeoutMs: scanOptions.timeoutMs,
+          probe: scanOptions.probe,
+        }),
+      ).catch(() => {
+        // Failures arrive through the portscan:error event.
+      });
+    },
+    [blockHosts, host, pushLog, targets],
+  );
+  const runScanRef = useRef(runScan);
+  runScanRef.current = runScan;
+  const autoStartedRef = useRef(false);
+
   useEffect(() => {
     if (!open) {
+      autoStartedRef.current = false;
       return;
     }
-    setPhase('options');
     setResults([]);
     setProgress(null);
     setDone(null);
@@ -200,8 +266,18 @@ const PortScanModal = ({
     setShowActivity(false);
     startedAtRef.current = 0;
     durationRef.current = 0;
+    if (blockMode) {
+      setOptions(blockOptions);
+      setPhase('scanning');
+      if (autoStart && !autoStartedRef.current) {
+        autoStartedRef.current = true;
+        runScanRef.current(blockOptions, cidr);
+      }
+      return;
+    }
     setOptions((previous) => ({ ...previous, scope: 'single' }));
-  }, [open, host]);
+    setPhase('options');
+  }, [open, host, blockMode, autoStart, cidr, blockOptions]);
 
   // Report collected open ports upward so the app can derive web endpoints.
   useEffect(() => {
@@ -219,7 +295,7 @@ const PortScanModal = ({
     if (!open) {
       return;
     }
-    const showHost = targets.length > 1;
+    const showHost = blockMode || targets.length > 1;
     const offOpen = EventsOn(EVENT_PORT_OPEN, (event: PortOpenEvent) => {
       setResults((previous) => [...previous, event]);
       pushLog('ok', describePort(event, showHost));
@@ -232,7 +308,7 @@ const PortScanModal = ({
       setProgress(null);
       setPhase('done');
       durationRef.current = startedAtRef.current ? Date.now() - startedAtRef.current : 0;
-      const scope = event.targets > 1 ? `${event.targets} targets · ` : '';
+      const scope = blockMode ? 'block · ' : event.targets > 1 ? `${event.targets} targets · ` : '';
       pushLog('ok', `portscan complete · ${scope}${event.open} open / ${event.scanned} ports each`);
     });
     const offError = EventsOn(EVENT_PORT_ERROR, (event: { message: string }) => {
@@ -248,7 +324,7 @@ const PortScanModal = ({
       offDone();
       offError();
     };
-  }, [open, pushLog, targets.length]);
+  }, [blockMode, open, pushLog, targets.length]);
 
   const rangeError = options.preset === 'custom' ? validateRange(options.portRange) : null;
   const canScanAll = targets.length > 1 && options.scope === 'all';
@@ -295,7 +371,7 @@ const PortScanModal = ({
   // groups orders the resolved targets first (so empty hosts are still shown
   // once the scan is done), then any extra hosts seen in the results.
   const groups = useMemo(() => {
-    const scanned = multi ? targets : [{ label: label ?? '', host }];
+    const scanned = blockMode ? [] : multi ? targets : [{ label: label ?? '', host }];
     const order: { host: string; label: string }[] = [];
     const seen = new Set<string>();
     if (phase === 'done') {
@@ -330,7 +406,7 @@ const PortScanModal = ({
       );
       return { ...group, rows };
     });
-  }, [filtered, host, label, multi, phase, sort, targets]);
+  }, [blockMode, filtered, host, label, multi, phase, sort, targets]);
 
   const showHost = groups.length > 1;
 
@@ -338,44 +414,20 @@ const PortScanModal = ({
     return null;
   }
 
-  const portSummary =
-    options.preset === 'custom'
-      ? `${options.portRange} · ${countPorts(options.portRange)} ports`
-      : PRESETS.find((preset) => preset.id === options.preset)?.label ?? options.preset;
-
   const start = () => {
     if (!canStart) {
       return;
     }
-    const scanAll = canScanAll;
-    startedAtRef.current = Date.now();
-    durationRef.current = 0;
-    setResults([]);
-    setProgress(null);
-    setDone(null);
-    setError(null);
-    setLogs([]);
-    setFilter('');
-    setShowActivity(false);
-    setPhase('scanning');
-    const scope = scanAll ? `${targets.length} targets` : host;
-    pushLog('info', `▶ portscan ${scope} · ${options.protocol} · ${portSummary}`);
-    ScanPorts(
-      main.PortScanRequest.createFrom({
-        host: scanAll ? '' : host,
-        targets: scanAll
-          ? targets.map((target) => main.PortScanTarget.createFrom({ label: target.label, host: target.host }))
-          : [],
-        protocol: options.protocol,
-        preset: options.preset === 'custom' ? '' : options.preset,
-        portRange: options.preset === 'custom' ? options.portRange : '',
-        concurrency: options.concurrency,
-        timeoutMs: options.timeoutMs,
-        probe: options.probe,
-      }),
-    ).catch(() => {
-      // Failures arrive through the portscan:error event.
-    });
+    runScan(options);
+  };
+
+  // rescan re-runs a block scan (which has no options screen) or a normal scan.
+  const rescan = () => {
+    if (blockMode) {
+      runScan(blockOptions, cidr);
+      return;
+    }
+    start();
   };
 
   const handleExport = () => {
@@ -434,12 +486,18 @@ const PortScanModal = ({
 
   return (
     <Modal
-      title="PORT SCAN"
+      title={blockMode ? 'BLOCK PORT SCAN' : 'PORT SCAN'}
       subtitle={
-        <>
-          {label ? `${label} · ` : ''}
-          {host}
-        </>
+        blockMode ? (
+          <>
+            IPv4 block · {cidr}
+          </>
+        ) : (
+          <>
+            {label ? `${label} · ` : ''}
+            {host}
+          </>
+        )
       }
       ariaLabel="Port scan"
       variant="modal--ports"
@@ -474,7 +532,7 @@ const PortScanModal = ({
               >
                 Export report
               </button>
-              <button type="button" className="btn btn--primary" disabled={!canStart} onClick={start}>
+              <button type="button" className="btn btn--primary" disabled={!blockMode && !canStart} onClick={rescan}>
                 Rescan
               </button>
             </>
@@ -664,12 +722,22 @@ const PortScanModal = ({
             </>
           ) : (
             <>
+              {blockMode && (
+                <div className="port-block-note">
+                  <span className="port-block-label">CIDR BLOCK</span>
+                  <span className="port-block-cidr selectable">{cidr}</span>
+                  <span className="port-block-count">
+                    {blockHosts.toLocaleString()} addresses · top 100 ports
+                  </span>
+                </div>
+              )}
+
               {phase === 'scanning' && (
                 <div className="port-progress">
                   <div className="port-progress-head">
                     <span>
                       {progress
-                        ? `${multi ? `target ${progress.target}/${progress.targets} · ` : ''}${progress.done}/${progress.total}`
+                        ? `${blockMode ? 'hosts ' : multi ? `target ${progress.target}/${progress.targets} · ` : ''}${progress.done}/${progress.total}`
                         : 'starting…'}
                     </span>
                     <span>{progress?.open ?? results.length} open</span>
@@ -685,8 +753,12 @@ const PortScanModal = ({
               {phase === 'done' && !error && (
                 <div className="port-summary">
                   <b>{results.length}</b> open
-                  {done ? ` · ${done.scanned} scanned${done.targets > 1 ? ' each' : ''}` : ''}
-                  {multi || (done?.targets ?? 1) > 1 ? ` · ${done?.targets ?? targets.length} targets` : ''}
+                  {done ? ` · ${done.scanned} ports${done.targets > 1 ? ' each' : ''}` : ''}
+                  {blockMode
+                    ? ` · ${done?.targets ?? blockHosts} addresses scanned`
+                    : multi || (done?.targets ?? 1) > 1
+                      ? ` · ${done?.targets ?? targets.length} targets`
+                      : ''}
                 </div>
               )}
 

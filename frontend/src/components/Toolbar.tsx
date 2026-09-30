@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import ContextMenu from './ContextMenu';
+import { parseCIDR } from '../cidr';
 
 interface ToolbarProps {
   target: string;
@@ -49,6 +50,10 @@ const Toolbar = ({
   const [toolsPos, setToolsPos] = useState({ x: 0, y: 0 });
   const toolsRef = useRef<HTMLButtonElement>(null);
 
+  // A CIDR target switches Trace into block mode (discover live hosts, then
+  // trace them) and Scan into a top-100 port scan of the whole block.
+  const cidr = useMemo(() => parseCIDR(target), [target]);
+
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter' && !isLoading) {
       onTrace();
@@ -87,6 +92,14 @@ const Toolbar = ({
             onChange={(event) => onTargetChange(event.target.value)}
             onKeyDown={onKeyDown}
           />
+          {cidr && (
+            <span
+              className="input-badge input-badge--cidr"
+              title={`${cidr.network}/${cidr.prefix} · ${cidr.count.toLocaleString()} usable hosts`}
+            >
+              CIDR · {cidr.count.toLocaleString()}
+            </span>
+          )}
         </div>
       </div>
 
@@ -109,7 +122,16 @@ const Toolbar = ({
         {isLoading ? 'Tracing' : 'Trace'}
       </button>
 
-      <button className="btn btn--scan" onClick={onScan} disabled={isLoading} title="Resolve all DNS records and trace each address">
+      <button
+        className="btn btn--scan"
+        onClick={onScan}
+        disabled={isLoading}
+        title={
+          cidr
+            ? 'CIDR block: trace live hosts / scan the block on the most common 100 ports'
+            : 'Resolve all DNS records and trace each address'
+        }
+      >
         Scan
       </button>
 

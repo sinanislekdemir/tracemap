@@ -3382,3 +3382,54 @@ body {
   background: var(--accent);
   color: var(--bg);
 }
+
+/* ---------- cidr block targets ---------- */
+.field--target .input {
+  padding-right: 120px;
+}
+.input-badge {
+  position: absolute;
+  right: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}
+.input-badge--cidr {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.port-block-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.port-block-label {
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+.port-block-cidr {
+  color: var(--accent);
+  font-size: 12px;
+}
+.port-block-count {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+

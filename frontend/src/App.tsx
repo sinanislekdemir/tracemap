@@ -14,6 +14,7 @@ import {
   SaveHistory,
   Scan,
   Trace,
+  TraceBlock,
   TraceTargets,
 } from '../wailsjs/go/main/App';
 import { EventsOff, EventsOn } from '../wailsjs/runtime/runtime';
@@ -48,6 +49,7 @@ import { findCheatsheet } from './cheatsheets';
 import { TRACE_COLORS } from './colors';
 import { buildDisplayHops, isLocated } from './traces';
 import {
+  EVENT_BLOCK_LOG,
   EVENT_CRAWL,
   EVENT_CRAWL_LOG,
   EVENT_CRAWL_PAGE,
@@ -64,7 +66,9 @@ import {
   EVENT_TARGET,
   EVENT_TARGET_GEO,
 } from './events';
+import { parseCIDR } from './cidr';
 import type {
+  BlockLogEvent,
   CorrelatedHop,
   CrawlPage,
   CrawlLogEvent,
@@ -105,6 +109,7 @@ const MAX_LOG_LINES = 2000;
 
 // Human labels for the subdomain-discovery phases reported by scan:progress.
 const SCAN_PHASE_LABELS: Record<string, string> = {
+  discover: 'discovering live hosts',
   subdomains: 'discovering subdomains',
   ptr: 'reverse-resolving',
   sweep: 'sweeping /24s',
@@ -142,6 +147,16 @@ function endpointFromPort(entry: PortOpenEvent): string | null {
   const defaultPort = (tls && result.port === 443) || (!tls && result.port === 80);
   const authority = `${hostForURL(entry.host)}${defaultPort ? '' : `:${result.port}`}`;
   return `${scheme}://${authority}/`;
+}
+
+// PortScanDialog is the state that opens the port scanner. For a CIDR target,
+// Cidr is set and the modal skips its options screen, auto-starting a block
+// scan over the most common ports.
+interface PortScanDialog {
+  host: string;
+  label: string;
+  cidr?: string;
+  autoStart?: boolean;
 }
 
 const App = () => {
@@ -183,7 +198,7 @@ const App = () => {
   const [tracingSubs, setTracingSubs] = useState(false);
   const [scanDomain, setScanDomain] = useState('');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; host: string; label: string } | null>(null);
-  const [portScan, setPortScan] = useState<{ host: string; label: string } | null>(null);
+  const [portScan, setPortScan] = useState<PortScanDialog | null>(null);
   const [domainOpen, setDomainOpen] = useState(false);
   const [originOpen, setOriginOpen] = useState(false);
   const [originMarkers, setOriginMarkers] = useState<OriginMarker[]>([]);
@@ -470,6 +485,15 @@ const App = () => {
     });
     EventsOn(EVENT_SCAN_PROGRESS, (event: ScanProgressEvent) => {
       setScanProgress(event);
+      // Host discovery for a CIDR block reports under "discover"; it has no
+      // step window of its own and logs to the trace channel.
+      if (event.phase === 'discover') {
+        if (!seenPhases.current.has('discover')) {
+          seenPhases.current.add('discover');
+          appendLog('info', 'phase · discovering live hosts', 'trace');
+        }
+        return;
+      }
       const channel: TerminalKind = event.phase === 'crawl' ? 'crawl' : 'subdomains';
       // Open the step's window on every event (it is a singleton); the backend
       // also emits a zero-progress event when the step starts.
@@ -481,6 +505,9 @@ const App = () => {
       if (event.total > 0 || event.done > 0) {
         appendLog('info', `progress · ${event.done}/${event.total} · ${event.found} found`, channel);
       }
+    });
+    EventsOn(EVENT_BLOCK_LOG, (event: BlockLogEvent) => {
+      appendLog(event.level, event.message, 'trace');
     });
     EventsOn(EVENT_SUBDOMAIN_LOG, (event: CrawlLogEvent) => {
       const level: LogLevel = event.level === 'ok' || event.level === 'warn' || event.level === 'error' ? event.level : 'info';
@@ -512,6 +539,7 @@ const App = () => {
       EventsOff(EVENT_SUBDOMAINS);
       EventsOff(EVENT_SUBDOMAIN_LOG);
       EventsOff(EVENT_SCAN_PROGRESS);
+      EventsOff(EVENT_BLOCK_LOG);
       EventsOff(EVENT_CRAWL_PAGE);
       EventsOff(EVENT_CRAWL);
       EventsOff(EVENT_CRAWL_LOG);
@@ -573,6 +601,22 @@ const App = () => {
       setError('Enter a target hostname or IP address.');
       return;
     }
+    const cidr = parseCIDR(trimmed);
+    if (cidr) {
+      // Trace a whole IPv4 block: discover live hosts, then trace each one.
+      // Multi-target, so it uses the scan pipeline (scan:targets/scan:done).
+      startOperation('scan');
+      setScanCompleted(false);
+      setLastTarget(trimmed);
+      setScanDomain('');
+      openWindow('trace', { title: `TRACE · ${trimmed}` });
+      appendLog('info', `▶ block trace ${trimmed} · /${cidr.prefix} · ${cidr.count} hosts · max ${maxHops} hops`, 'trace');
+      appendLog('info', `▶ block trace ${trimmed} · /${cidr.prefix} · ${cidr.count} hosts`, 'console');
+      TraceBlock(main.TraceBlockRequest.createFrom({ cidr: trimmed, maxHops })).catch(() => {
+        // Failures are surfaced through the trace:error event.
+      });
+      return;
+    }
     startOperation('trace');
     setTraces([{ id: 0, label: trimmed, color: TRACE_COLORS[0], hops: [] }]);
     setSelectedTraces(new Set());
@@ -595,6 +639,13 @@ const App = () => {
       setError('Enter a domain to scan.');
       return;
     }
+    if (parseCIDR(trimmed)) {
+      // A CIDR block has no DNS records to discover: skip the scan options and
+      // go straight to a top-100 port scan of the whole block.
+      setError(null);
+      setPortScan({ host: trimmed, label: trimmed, cidr: trimmed, autoStart: true });
+      return;
+    }
     setError(null);
     setScanOpen(true);
   }, [target]);
@@ -606,6 +657,10 @@ const App = () => {
       return;
     }
     setError(null);
+    if (parseCIDR(trimmed)) {
+      setPortScan({ host: trimmed, label: trimmed, cidr: trimmed, autoStart: true });
+      return;
+    }
     setPortScan({ host: trimmed, label: trimmed });
   }, [target, traces.length]);
 
@@ -1557,6 +1612,8 @@ const App = () => {
         open={portScan != null}
         host={portScan?.host ?? ''}
         label={portScan?.label}
+        cidr={portScan?.cidr}
+        autoStart={portScan?.autoStart}
         targets={portScanTargets}
         onClose={() => setPortScan(null)}
         onLog={appendPortLog}

@@ -65,6 +65,8 @@ export function ScanPorts(arg1:main.PortScanRequest):Promise<void>;
 
 export function Trace(arg1:main.TraceRequest):Promise<void>;
 
+export function TraceBlock(arg1:main.TraceBlockRequest):Promise<void>;
+
 export function TraceTargets(arg1:main.TraceTargetsRequest):Promise<void>;
 
 export function UnmaskRulesPath():Promise<main.UnmaskRulesInfo>;

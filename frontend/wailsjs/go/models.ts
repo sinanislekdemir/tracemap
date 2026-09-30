@@ -949,6 +949,7 @@ export namespace main {
 	export class PortScanRequest {
 	    host: string;
 	    targets: PortScanTarget[];
+	    cidr?: string;
 	    protocol: string;
 	    preset: string;
 	    portRange: string;
@@ -964,6 +965,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.host = source["host"];
 	        this.targets = this.convertValues(source["targets"], PortScanTarget);
+	        this.cidr = source["cidr"];
 	        this.protocol = source["protocol"];
 	        this.preset = source["preset"];
 	        this.portRange = source["portRange"];
@@ -1073,6 +1075,20 @@ export namespace main {
 	        this.tool = source["tool"];
 	        this.message = source["message"];
 	        this.hint = source["hint"];
+	    }
+	}
+	export class TraceBlockRequest {
+	    cidr: string;
+	    maxHops: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TraceBlockRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.cidr = source["cidr"];
+	        this.maxHops = source["maxHops"];
 	    }
 	}
 	export class TraceRequest {

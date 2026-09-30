@@ -51,6 +51,7 @@ internal/dnscheck/          A/AAAA/CNAME/MX/NS lookup -> trace targets
 internal/domaincheck/       domain security report (RDAP/WHOIS, DNS, email auth, web/TLS)
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/webcrawl/          browser-UA HTTP crawl (frontpage + 1 level, robots, sitemap)
+internal/hostscan/          IPv4 CIDR enumeration + live-host discovery (TCP connect)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
 internal/origin/            keyless origin discovery behind CDNs/proxies ("unmask")
 internal/netcat/            interactive TCP sessions ("nc") for floating windows
@@ -149,6 +150,24 @@ PLAN.md                     design/architecture document
   report via the native save dialog (`formatPortScanReport`, `.txt`); the
   frontend assembles a `PortScanReport` (scan options, resolved targets, timing,
   `[]PortScanRow`) for it.
+- **IPv4 CIDR block targets** (`internal/hostscan`): when the toolbar target box
+  holds an IPv4 CIDR (detected by `frontend/src/cidr.ts`, which mirrors
+  `hostscan.ParseCIDR`), the Trace and Scan buttons switch to block mode.
+  `App.TraceBlock` (`TraceBlockRequest{cidr,maxHops}`) enumerates the usable
+  addresses (`hostscan.Each`, streaming — network/broadcast excluded up to /30),
+  discovers live hosts by TCP-connecting to `portscan.Top100` concurrently
+  (`hostscan.Discover`, bounded hosts×ports, first open port short-circuits the
+  rest), then traces each live address through the normal `traceScan` pipeline
+  (`scan:targets`/`scan:done`). Discovery streams `scan:progress` phase
+  `discover` and verbose `block:log` events; it uses the shared `App.begin()`
+  canceler, so Cancel stops it. No hard block-size cap: blocks over 65536
+  addresses log a warning.
+  Scan on a CIDR skips `ScanModal` and opens `PortScanModal` in block mode
+  (`cidr` + `autoStart` props): it hides the options screen, forces the top-100
+  preset and calls `ScanPorts` with `PortScanRequest.cidr`. The backend's
+  `scanPortBlock` enumerates the block internally and scans all hosts with
+  `portScanHostConcurrency`, reporting host-level (not per-port) progress so the
+  event stream stays bounded; rows carry per-host Trace/Connect/HTTP actions.
 - **Domain analysis** (`internal/domaincheck`): builds a security/reliability
   report for a domain. Registration comes from RDAP via the IANA bootstrap
   (`data.iana.org/rdap/dns.json`, cached in memory), falling back to classic

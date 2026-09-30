@@ -34,3 +34,5 @@ export const EVENT_ORIGIN_LOG = 'origin:log';
 export const EVENT_HTTP_PROGRESS = 'http:progress';
 export const EVENT_HTTP_LOG = 'http:log';
 export const EVENT_HTTP_RESULT = 'http:result';
+
+export const EVENT_BLOCK_LOG = 'block:log';

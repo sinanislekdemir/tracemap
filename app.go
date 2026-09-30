@@ -21,6 +21,7 @@ import (
 	"traceroute/internal/domaincheck"
 	"traceroute/internal/geolocator"
 	"traceroute/internal/history"
+	"traceroute/internal/hostscan"
 	"traceroute/internal/httpcheck"
 	"traceroute/internal/netcat"
 	"traceroute/internal/netutil"
@@ -61,6 +62,7 @@ const (
 	EventHTTPProgress   = "http:progress"
 	EventHTTPLog        = "http:log"
 	EventHTTPResult     = "http:result"
+	EventBlockLog       = "block:log"
 )
 
 // scanConcurrency limits how many traces an advanced scan runs at once.
@@ -77,6 +79,19 @@ type ScanRequest struct {
 	Domain  string      `json:"domain"`
 	MaxHops int         `json:"maxHops"`
 	Options ScanOptions `json:"options"`
+}
+
+// TraceBlockRequest discovers the live hosts in an IPv4 CIDR block and traces
+// each one. It is used when the target box holds a CIDR rather than a host.
+type TraceBlockRequest struct {
+	CIDR    string `json:"cidr"`
+	MaxHops int    `json:"maxHops"`
+}
+
+// BlockLogEvent is a verbose CIDR block-discovery step, streamed to the UI.
+type BlockLogEvent struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
 }
 
 // ScanOptions controls what an advanced scan discovers and traces.
@@ -136,10 +151,12 @@ type PortScanTarget struct {
 
 // PortScanRequest starts a port scan. Either Preset or PortRange selects the
 // ports; PortRange wins when both are set. When Targets is non-empty each entry
-// is scanned and Host is ignored; otherwise the single Host is scanned.
+// is scanned and Host is ignored; otherwise the single Host is scanned. When
+// CIDR is set the whole IPv4 block is scanned and Host/Targets are ignored.
 type PortScanRequest struct {
 	Host        string           `json:"host"`
 	Targets     []PortScanTarget `json:"targets"`
+	CIDR        string           `json:"cidr,omitempty"`
 	Protocol    string           `json:"protocol"`
 	Preset      string           `json:"preset"`
 	PortRange   string           `json:"portRange"`
@@ -365,6 +382,7 @@ type App struct {
 	ports  *portscan.Scanner
 	nc     *netcat.Manager
 	domain *domaincheck.Analyzer
+	hs     *hostscan.Scanner
 
 	// Each independent operation family owns a canceler so a run cannot
 	// accidentally clear a newer run's cancellation handle.
@@ -383,6 +401,7 @@ func NewApp() *App {
 		ports:  portscan.NewScanner(),
 		nc:     netcat.NewManager(),
 		domain: domaincheck.NewAnalyzer(),
+		hs:     hostscan.NewScanner(),
 	}
 
 	store, err := history.Open(appdata.DefaultPath())
@@ -605,6 +624,75 @@ func (a *App) TraceTargets(req TraceTargetsRequest) error {
 	return a.traceScan(ctx, targets, req.MaxHops)
 }
 
+// TraceBlock discovers the live hosts in an IPv4 CIDR block by probing a set
+// of common TCP ports, then traces each live address. Discovery streams
+// scan:progress (phase "discover") and block:log events; the traced targets are
+// announced through scan:targets, exactly like an advanced scan. It shares the
+// trace cancellation model, so Cancel stops it.
+func (a *App) TraceBlock(req TraceBlockRequest) error {
+	ctx, end := a.begin()
+	defer end()
+
+	network, ok := hostscan.ParseCIDR(req.CIDR)
+	if !ok {
+		message := fmt.Sprintf("invalid IPv4 CIDR block %q", strings.TrimSpace(req.CIDR))
+		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+		return errors.New(message)
+	}
+	total := hostscan.Count(network)
+	runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
+		Level:   "info",
+		Message: fmt.Sprintf("discovering live hosts in %s · %d addresses · top 100 ports", strings.TrimSpace(req.CIDR), total),
+	})
+	if total > 65536 {
+		runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
+			Level:   "warn",
+			Message: fmt.Sprintf("large block · %d addresses · discovery may take a long time", total),
+		})
+	}
+
+	live, err := a.hs.Discover(ctx, network, hostscan.Options{Ports: portscan.Top100}, hostscan.Observer{
+		OnFound: func(host string, openPort int) {
+			runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
+				Level:   "ok",
+				Message: fmt.Sprintf("live %s · tcp/%d open", host, openPort),
+			})
+		},
+		OnProgress: func(done, hostTotal uint64, found int) {
+			runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{
+				Phase: "discover", Done: int(done), Total: int(hostTotal), Found: found,
+			})
+		},
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: err.Error()})
+		return err
+	}
+	if ctx.Err() != nil {
+		// Cancelled during discovery: close out the operation so the UI
+		// clears its busy state (there are no targets to trace).
+		runtime.EventsEmit(a.ctx, EventScanDone, 0)
+		return ctx.Err()
+	}
+	if len(live) == 0 {
+		message := fmt.Sprintf("no live hosts found in %s", strings.TrimSpace(req.CIDR))
+		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+		return errors.New(message)
+	}
+	runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
+		Level:   "ok",
+		Message: fmt.Sprintf("%d live host(s) discovered — tracing", len(live)),
+	})
+
+	targets := make([]dnscheck.Target, 0, len(live))
+	for index, host := range live {
+		targets = append(targets, dnscheck.Target{
+			ID: index + 1, Kind: "BLOCK", Label: host, IP: host,
+		})
+	}
+	return a.traceScan(ctx, targets, req.MaxHops)
+}
+
 // traceScan announces the targets and runs their traces with bounded
 // concurrency, then reports completion.
 func (a *App) traceScan(ctx context.Context, targets []dnscheck.Target, maxHops int) error {
@@ -731,13 +819,6 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 	ctx, end := a.portOps.begin(a.ctx)
 	defer end()
 
-	targets := normalizePortScanTargets(req)
-	if len(targets) == 0 {
-		message := "no host to scan"
-		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: message})
-		return errors.New(message)
-	}
-
 	ports, err := resolveScanPorts(req)
 	if err != nil {
 		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: err.Error()})
@@ -751,6 +832,17 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 		Timeout:     time.Duration(req.TimeoutMs) * time.Millisecond,
 		Probe:       req.Probe,
 		Jitter:      portscan.DefaultJitter,
+	}
+
+	if cidr := strings.TrimSpace(req.CIDR); cidr != "" {
+		return a.scanPortBlock(ctx, cidr, ports, opts)
+	}
+
+	targets := normalizePortScanTargets(req)
+	if len(targets) == 0 {
+		message := "no host to scan"
+		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: message})
+		return errors.New(message)
 	}
 
 	var (
@@ -799,6 +891,85 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 	runtime.EventsEmit(a.ctx, EventPortDone, PortScanDoneEvent{
 		Host: targets[0].Host, Scanned: len(ports), Open: int(atomic.LoadInt64(&open)),
 		Targets: len(targets),
+	})
+	return nil
+}
+
+// scanPortBlock port-scans every usable host in an IPv4 CIDR block, streaming
+// open ports as portscan:open. It reports host-level progress (not per-port, to
+// keep the event stream bounded) through portscan:progress, using Target/Targets
+// for the host index/count and Done/Total for hosts completed. It ends with
+// portscan:done.
+func (a *App) scanPortBlock(ctx context.Context, cidr string, ports []int, opts portscan.Options) error {
+	network, ok := hostscan.ParseCIDR(cidr)
+	if !ok {
+		message := fmt.Sprintf("invalid IPv4 CIDR block %q", cidr)
+		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: message})
+		return errors.New(message)
+	}
+	total := hostscan.Count(network)
+	if total == 0 {
+		message := fmt.Sprintf("no usable addresses in %s", cidr)
+		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: message})
+		return errors.New(message)
+	}
+
+	var (
+		open      int64
+		completed uint64
+		mu        sync.Mutex
+		scanErr   error
+	)
+	sem := make(chan struct{}, portScanHostConcurrency)
+	var wg sync.WaitGroup
+
+	hostscan.Each(network, func(host string) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return false
+		}
+		wg.Add(1)
+		go func(h string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			_, err := a.ports.Scan(ctx, h, opts, portscan.Observer{
+				OnOpen: func(result portscan.Result) {
+					atomic.AddInt64(&open, 1)
+					runtime.EventsEmit(a.ctx, EventPortOpen, PortOpenEvent{
+						Host: h, Label: h, Result: result,
+					})
+				},
+			})
+			if err != nil && !errors.Is(err, context.Canceled) {
+				mu.Lock()
+				if scanErr == nil {
+					scanErr = err
+				}
+				mu.Unlock()
+			}
+			// Report host-level progress once the host's ports are done.
+			n := atomic.AddUint64(&completed, 1)
+			runtime.EventsEmit(a.ctx, EventPortProgress, PortScanProgressEvent{
+				Host: h, Done: int(n), Total: int(total), Open: int(atomic.LoadInt64(&open)),
+				Target: int(n), Targets: int(total),
+			})
+		}(host)
+		return true
+	})
+	wg.Wait()
+
+	if scanErr != nil {
+		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: scanErr.Error()})
+		return scanErr
+	}
+	runtime.EventsEmit(a.ctx, EventPortDone, PortScanDoneEvent{
+		Host: cidr, Scanned: len(ports), Open: int(atomic.LoadInt64(&open)),
+		Targets: int(total),
 	})
 	return nil
 }

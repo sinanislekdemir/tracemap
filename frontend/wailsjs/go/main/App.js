@@ -118,6 +118,10 @@ export function Trace(arg1) {
   return window['go']['main']['App']['Trace'](arg1);
 }
 
+export function TraceBlock(arg1) {
+  return window['go']['main']['App']['TraceBlock'](arg1);
+}
+
 export function TraceTargets(arg1) {
   return window['go']['main']['App']['TraceTargets'](arg1);
 }

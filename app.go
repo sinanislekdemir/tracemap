@@ -21,6 +21,7 @@ import (
 	"traceroute/internal/domaincheck"
 	"traceroute/internal/geolocator"
 	"traceroute/internal/history"
+	"traceroute/internal/httpcheck"
 	"traceroute/internal/netcat"
 	"traceroute/internal/netutil"
 	"traceroute/internal/origin"
@@ -57,6 +58,9 @@ const (
 	EventDomainProgress = "domain:progress"
 	EventOriginProgress = "origin:progress"
 	EventOriginLog      = "origin:log"
+	EventHTTPProgress   = "http:progress"
+	EventHTTPLog        = "http:log"
+	EventHTTPResult     = "http:result"
 )
 
 // scanConcurrency limits how many traces an advanced scan runs at once.
@@ -323,6 +327,34 @@ type OriginLogEvent struct {
 	Message string `json:"message"`
 }
 
+// EndpointTarget is one HTTP endpoint to analyze. Source records where it came
+// from ("crawl", "ports" or "manual") so the UI can label it.
+type EndpointTarget struct {
+	URL    string `json:"url"`
+	Label  string `json:"label,omitempty"`
+	Source string `json:"source,omitempty"`
+}
+
+// EndpointAnalysisRequest analyzes a batch of discovered HTTP endpoints.
+type EndpointAnalysisRequest struct {
+	Targets []EndpointTarget `json:"targets"`
+}
+
+// EndpointProgressEvent reports how many endpoints have been analyzed.
+type EndpointProgressEvent struct {
+	URL   string `json:"url"`
+	Done  int    `json:"done"`
+	Total int    `json:"total"`
+}
+
+// EndpointLogEvent is a verbose step for one endpoint.
+type EndpointLogEvent struct {
+	URL     string `json:"url"`
+	Label   string `json:"label,omitempty"`
+	Level   string `json:"level"`
+	Message string `json:"message"`
+}
+
 // App is the Wails application backend.
 type App struct {
 	ctx    context.Context
@@ -340,6 +372,7 @@ type App struct {
 	portOps   canceler
 	domainOps canceler
 	originOps canceler
+	httpOps   canceler
 }
 
 // NewApp creates the application backend.
@@ -1049,6 +1082,122 @@ func (a *App) ExportPortScanReport(report PortScanReport) (string, error) {
 	}
 	name = strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(name)
 	return a.saveTextReport("Save port scan report", name+"-portscan.txt", formatPortScanReport(report))
+}
+
+// endpointConcurrency bounds how many endpoints are analyzed at once, and
+// maxEndpoints caps a single batch.
+const (
+	endpointConcurrency = 4
+	maxEndpoints        = 256
+)
+
+// AnalyzeEndpoints fetches and analyzes discovered HTTP endpoints: response
+// headers, default/framework cookies, caching and the technology exposed. It
+// runs with its own cancellation context, independent of traces, scans and
+// port scans. Progress is streamed through http:log/http:result/http:progress;
+// the finished reports are also the return value.
+func (a *App) AnalyzeEndpoints(req EndpointAnalysisRequest) ([]httpcheck.Report, error) {
+	ctx, end := a.httpOps.begin(a.ctx)
+	defer end()
+
+	targets, dropped := normalizeEndpointTargets(req)
+	if len(targets) == 0 {
+		message := "no endpoints to analyze"
+		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+		return nil, errors.New(message)
+	}
+	if dropped > 0 {
+		runtime.EventsEmit(a.ctx, EventHTTPLog, EndpointLogEvent{
+			Level:   "warn",
+			Message: fmt.Sprintf("%d endpoint(s) beyond the %d limit were skipped", dropped, maxEndpoints),
+		})
+	}
+
+	reports := make([]httpcheck.Report, len(targets))
+	var (
+		done int64
+		wg   sync.WaitGroup
+	)
+	sem := make(chan struct{}, endpointConcurrency)
+	for index, target := range targets {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, tgt EndpointTarget) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			report := httpcheck.Analyze(ctx, tgt.URL, httpcheck.Options{
+				OnLog: func(level, message string) {
+					runtime.EventsEmit(a.ctx, EventHTTPLog, EndpointLogEvent{
+						URL: tgt.URL, Label: tgt.Label, Level: level, Message: message,
+					})
+				},
+			})
+			reports[idx] = report
+
+			n := atomic.AddInt64(&done, 1)
+			runtime.EventsEmit(a.ctx, EventHTTPResult, report)
+			runtime.EventsEmit(a.ctx, EventHTTPProgress, EndpointProgressEvent{
+				URL: tgt.URL, Done: int(n), Total: len(targets),
+			})
+		}(index, target)
+	}
+	wg.Wait()
+
+	out := make([]httpcheck.Report, 0, len(reports))
+	for _, report := range reports {
+		if report.URL == "" && report.Error == "" {
+			continue
+		}
+		out = append(out, report)
+	}
+	return out, nil
+}
+
+// normalizeEndpointTargets trims, dedupes and caps a request's endpoints,
+// returning the kept targets and how many were dropped over the cap.
+func normalizeEndpointTargets(req EndpointAnalysisRequest) (targets []EndpointTarget, dropped int) {
+	seen := make(map[string]struct{}, len(req.Targets))
+	out := make([]EndpointTarget, 0, len(req.Targets))
+	for _, target := range req.Targets {
+		raw := strings.TrimSpace(target.URL)
+		if raw == "" {
+			continue
+		}
+		if _, ok := seen[raw]; ok {
+			continue
+		}
+		seen[raw] = struct{}{}
+		if len(out) >= maxEndpoints {
+			dropped++
+			continue
+		}
+		out = append(out, EndpointTarget{
+			URL: raw, Label: strings.TrimSpace(target.Label), Source: strings.TrimSpace(target.Source),
+		})
+	}
+	return out, dropped
+}
+
+// CancelEndpointAnalysis stops a running endpoint analysis, if any.
+func (a *App) CancelEndpointAnalysis() {
+	a.httpOps.stop()
+}
+
+// ExportHTTPReport renders the endpoint analyses as text and writes them to a
+// path chosen by the user, returning the path (empty when cancelled).
+func (a *App) ExportHTTPReport(reports []httpcheck.Report) (string, error) {
+	name := "http-endpoints"
+	if len(reports) == 1 {
+		if host := strings.TrimSpace(reports[0].Host); host != "" {
+			name = host
+		}
+	}
+	name = strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(name)
+	return a.saveTextReport("Save HTTP endpoint report", name+"-http-report.txt", httpcheck.FormatReport(reports))
 }
 
 // formatPortScanReport renders a port scan as a verbose, human-readable

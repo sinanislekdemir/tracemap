@@ -3234,3 +3234,151 @@ body {
   font-size: 10px;
   color: var(--text-faint);
 }
+
+/* ---------- http endpoint analysis ---------- */
+.http-targets {
+  margin-bottom: 12px;
+}
+.http-add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.http-add .input {
+  flex: 1 1 auto;
+}
+.http-target-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.http-target-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 4px 3px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.http-target-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+.http-target-source {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+.http-target-remove {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  line-height: 1;
+}
+.http-target-remove:hover:not(:disabled) {
+  color: var(--err);
+}
+.http-activity {
+  margin: 10px 0;
+  height: 120px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.http-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.http-result-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.http-result-row:hover {
+  border-color: var(--border-strong);
+}
+.http-result-row.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.http-result-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.http-result-meta {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.http-cookie-table {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.http-cookie-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 2fr;
+  gap: 4px 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.http-cookie-name {
+  color: var(--accent);
+}
+.http-cookie-flags {
+  color: var(--text-dim);
+}
+.http-cookie-issues {
+  grid-column: 2;
+  color: var(--warn);
+  font-size: 10px;
+}
+.port-http-btn {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.port-http-btn:hover {
+  background: var(--accent);
+  color: var(--bg);
+}

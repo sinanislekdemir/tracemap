@@ -367,3 +367,126 @@ export interface OriginMarker {
   verdict: string;
   label: string;
 }
+
+/** One response header in an endpoint analysis, tagged with its role. */
+export interface HttpHeader {
+  name: string;
+  value: string;
+  kind: string;
+}
+
+/** One Set-Cookie with its security flags and inferred technology. */
+export interface HttpCookie {
+  name: string;
+  value?: string;
+  domain?: string;
+  path?: string;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite?: string;
+  session: boolean;
+  expires?: number;
+  maxAge?: number;
+  tech?: string;
+  flags?: string[];
+}
+
+/** The interpreted caching policy of an endpoint. */
+export interface HttpCache {
+  cacheControl?: string;
+  directives?: string[];
+  pragma?: string;
+  expires?: string;
+  age: number;
+  etag?: string;
+  lastModified?: string;
+  vary?: string[];
+  public: boolean;
+  private: boolean;
+  noStore: boolean;
+  noCache: boolean;
+  maxAge: number;
+  sMaxAge: number;
+  cacheable: boolean;
+  shared: boolean;
+  cdn?: string;
+}
+
+/** One detected technology and the evidence for it. */
+export interface HttpTech {
+  name: string;
+  category: string;
+  evidence: string;
+}
+
+/** TLS handshake summary. */
+export interface HttpTLS {
+  version?: string;
+  cipher?: string;
+  alpn?: string;
+  subject?: string;
+  issuer?: string;
+  sans?: string[];
+  notAfter?: number;
+  daysLeft: number;
+}
+
+/** One redirect hop. */
+export interface HttpRedirect {
+  from: string;
+  to: string;
+  status: number;
+}
+
+/** One item on the endpoint analysis checklist. */
+export interface HttpCheck {
+  id: string;
+  category: string;
+  title: string;
+  status: CheckStatus;
+  detail: string;
+}
+
+/** Full analysis of one HTTP endpoint. */
+export interface HttpReport {
+  url: string;
+  finalUrl?: string;
+  host?: string;
+  status: number;
+  https: boolean;
+  contentType?: string;
+  server?: string;
+  headers?: HttpHeader[];
+  checks: HttpCheck[];
+  cookies?: HttpCookie[];
+  caching: HttpCache;
+  tech?: HttpTech[];
+  tls?: HttpTLS;
+  redirects?: HttpRedirect[];
+  bodySize?: number;
+  truncated?: boolean;
+  error?: string;
+  score: number;
+  grade: string;
+  analyzedAt: number;
+}
+
+/** An endpoint to analyze, with where it came from. */
+export interface HttpEndpointTarget {
+  url: string;
+  label?: string;
+  source?: string;
+}
+
+export interface HttpProgressEvent {
+  url: string;
+  done: number;
+  total: number;
+}
+
+export interface HttpLogEvent {
+  url: string;
+  label?: string;
+  level: LogLevel;
+  message: string;
+}

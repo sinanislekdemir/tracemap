@@ -22,6 +22,7 @@ import CheatsheetPanel from './components/CheatsheetPanel';
 import ContextMenu from './components/ContextMenu';
 import CorrelationList from './components/CorrelationList';
 import DomainAnalysisModal from './components/DomainAnalysisModal';
+import EndpointAnalysisModal from './components/EndpointAnalysisModal';
 import FloatingWindow from './components/FloatingWindow';
 import GeoCacheModal from './components/GeoCacheModal';
 import HistoryModal from './components/HistoryModal';
@@ -78,9 +79,11 @@ import type {
   HistorySummary,
   HopData,
   HopEvent,
+  HttpEndpointTarget,
   LogLevel,
   LogLine,
   OriginMarker,
+  PortOpenEvent,
   PortScanTarget,
   ScanOptions,
   ScanProgressEvent,
@@ -107,6 +110,39 @@ const SCAN_PHASE_LABELS: Record<string, string> = {
   sweep: 'sweeping /24s',
   crawl: 'crawling',
 };
+
+// Well-known ports used to turn an open port into an HTTP(S) endpoint.
+const HTTP_PORTS = new Set([80, 3000, 5000, 5601, 8000, 8008, 8080, 8081, 8086, 8088, 8888, 9000, 9090, 9200, 15672]);
+const TLS_PORTS = new Set([443, 465, 636, 990, 993, 995, 4443, 6443, 8443, 9443]);
+
+const HTTP_SERVICE_HINT = /http|apache|nginx|iis|tomcat|jetty|caddy|envoy|traefik|gunicorn|uvicorn|werkzeug|openresty|litespeed/;
+
+// hostForURL brackets IPv6 literals so they can be embedded in a URL.
+function hostForURL(host: string): string {
+  if (host.includes(':') && !host.startsWith('[')) {
+    return `[${host}]`;
+  }
+  return host;
+}
+
+// endpointFromPort builds a best-guess HTTP(S) URL for an open port, or null
+// when the port does not look like a web service.
+function endpointFromPort(entry: PortOpenEvent): string | null {
+  const result = entry.result;
+  if (result.protocol !== 'tcp') {
+    return null;
+  }
+  const textual = `${result.service ?? ''} ${result.product ?? ''} ${result.banner ?? ''}`.toLowerCase();
+  const tls = result.tls === true || TLS_PORTS.has(result.port);
+  const web = tls || HTTP_PORTS.has(result.port) || HTTP_SERVICE_HINT.test(textual);
+  if (!web) {
+    return null;
+  }
+  const scheme = tls ? 'https' : 'http';
+  const defaultPort = (tls && result.port === 443) || (!tls && result.port === 80);
+  const authority = `${hostForURL(entry.host)}${defaultPort ? '' : `:${result.port}`}`;
+  return `${scheme}://${authority}/`;
+}
 
 const App = () => {
   const [theme, setTheme] = useState<Theme>(loadTheme);
@@ -145,11 +181,15 @@ const App = () => {
   const [scanProgress, setScanProgress] = useState<ScanProgressEvent | null>(null);
   const [scanCompleted, setScanCompleted] = useState(false);
   const [tracingSubs, setTracingSubs] = useState(false);
+  const [scanDomain, setScanDomain] = useState('');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; host: string; label: string } | null>(null);
   const [portScan, setPortScan] = useState<{ host: string; label: string } | null>(null);
   const [domainOpen, setDomainOpen] = useState(false);
   const [originOpen, setOriginOpen] = useState(false);
   const [originMarkers, setOriginMarkers] = useState<OriginMarker[]>([]);
+  const [httpOpen, setHttpOpen] = useState(false);
+  const [httpSeed, setHttpSeed] = useState<HttpEndpointTarget[]>([]);
+  const [portFindings, setPortFindings] = useState<PortOpenEvent[]>([]);
   const [logChannels, setLogChannels] = useState<Record<string, LogLine[]>>({});
   const busyRef = useRef(false);
   const toastTimer = useRef<number | null>(null);
@@ -192,6 +232,10 @@ const App = () => {
     (level: LogLevel, text: string) => appendLog(level, text, 'origin'),
     [appendLog],
   );
+  const appendHttpLog = useCallback(
+    (level: LogLevel, text: string) => appendLog(level, text, 'http'),
+    [appendLog],
+  );
 
   // openStep auto-opens a scan-step window unless the user closed it during
   // this operation; explicit actions (toolbar, context menu) always open.
@@ -229,7 +273,7 @@ const App = () => {
       return;
     }
     const width = 240;
-    const height = 108;
+    const height = 152;
     setContextMenu({
       x: Math.max(8, Math.min(x, window.innerWidth - width)),
       y: Math.max(8, Math.min(y, window.innerHeight - height)),
@@ -493,6 +537,8 @@ const App = () => {
     setScanProgress(null);
     setTracingSubs(false);
     setOriginMarkers([]);
+    setPortFindings([]);
+    setScanDomain('');
   }, []);
 
   const startOperation = useCallback(
@@ -596,6 +642,7 @@ const App = () => {
       startOperation('scan');
       setScanCompleted(false);
       setLastTarget(trimmed);
+      setScanDomain(trimmed);
       // Open every enabled step's window up front so the UI shows the pending
       // work immediately; discovery and crawl can take a while before their
       // first event arrives.
@@ -986,6 +1033,68 @@ const App = () => {
     return out;
   }, [traces]);
 
+  // httpEndpoints is the main target domain plus every discovered subdomain's
+  // root URL, then any open HTTP(S) ports from the most recent port scan. The
+  // crawl's URLs are intentionally not used: crawling is page-bounded and its
+  // URL set is dominated by external links. Root URLs are seeded as bare hosts
+  // so the analyzer tries https first and falls back to http; subdomains with
+  // no web access simply report as unreachable.
+  const httpEndpoints = useMemo<HttpEndpointTarget[]>(() => {
+    const seen = new Set<string>();
+    const out: HttpEndpointTarget[] = [];
+    const add = (url: string, label: string | undefined, source: string) => {
+      if (seen.has(url)) {
+        return;
+      }
+      seen.add(url);
+      out.push({ url, label, source });
+    };
+    if (scanDomain) {
+      add(scanDomain, scanDomain, 'target');
+    }
+    for (const subdomain of subdomains) {
+      const name = subdomain.name.trim();
+      if (name) {
+        add(name, name, 'subdomain');
+      }
+    }
+    for (const finding of portFindings) {
+      const url = endpointFromPort(finding);
+      if (url) {
+        add(url, finding.label || finding.host, 'ports');
+      }
+    }
+    return out;
+  }, [scanDomain, subdomains, portFindings]);
+
+  const openHttpAnalysis = useCallback((seed: HttpEndpointTarget[]) => {
+    setHttpSeed(seed);
+    setHttpOpen(true);
+  }, []);
+
+  const openHttpAnalysisForTarget = useCallback(() => {
+    openHttpAnalysis(httpEndpoints);
+  }, [httpEndpoints, openHttpAnalysis]);
+
+  const analyzeHostHttp = useCallback(
+    (host: string, label?: string) => {
+      if (!host) {
+        return;
+      }
+      const authority = hostForURL(host);
+      const name = label || host;
+      openHttpAnalysis([
+        { url: `https://${authority}/`, label: name, source: 'manual' },
+        { url: `http://${authority}/`, label: name, source: 'manual' },
+      ]);
+    },
+    [openHttpAnalysis],
+  );
+
+  const handlePortFindings = useCallback((findings: PortOpenEvent[]) => {
+    setPortFindings(findings);
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && busyRef.current) {
@@ -1133,6 +1242,7 @@ const App = () => {
         onUnmask={handleUnmask}
         canUnmask={scanCompleted}
         onPortScan={handlePortScan}
+        onHttpAnalysis={openHttpAnalysisForTarget}
         onNet={() => openNetcat(target.trim())}
         onConsole={openConsole}
         onGeoCache={handleOpenGeoCache}
@@ -1451,6 +1561,15 @@ const App = () => {
         onClose={() => setPortScan(null)}
         onLog={appendPortLog}
         onConnect={(host, port, tls) => openNetcat(host, port, tls)}
+        onResultsChange={handlePortFindings}
+        onAnalyzeHttp={(host, label) => analyzeHostHttp(host, label)}
+      />
+
+      <EndpointAnalysisModal
+        open={httpOpen}
+        seed={httpSeed}
+        onClose={() => setHttpOpen(false)}
+        onLog={appendHttpLog}
       />
 
       <DomainAnalysisModal
@@ -1482,6 +1601,11 @@ const App = () => {
               onSelect: () => {
                 setPortScan({ host: contextMenu.host, label: contextMenu.label });
               },
+            },
+            {
+              label: 'Analyze HTTP',
+              hint: contextMenu.host,
+              onSelect: () => analyzeHostHttp(contextMenu.host, contextMenu.label),
             },
             {
               label: 'Connect (nc)',

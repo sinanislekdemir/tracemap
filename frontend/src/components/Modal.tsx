@@ -24,6 +24,7 @@ const VARIANT_WIDTHS: Record<string, number> = {
   'modal--scan': 620,
   'modal--ports': 680,
   'modal--domain': 760,
+  'modal--http': 720,
   'modal--tool': 540,
   'modal--geocache': 720,
 };

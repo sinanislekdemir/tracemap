@@ -14,6 +14,7 @@ interface ToolbarProps {
   onUnmask: () => void;
   canUnmask: boolean;
   onPortScan: () => void;
+  onHttpAnalysis: () => void;
   onNet: () => void;
   onConsole: () => void;
   onGeoCache: () => void;
@@ -35,6 +36,7 @@ const Toolbar = ({
   onUnmask,
   canUnmask,
   onPortScan,
+  onHttpAnalysis,
   onNet,
   onConsole,
   onGeoCache,
@@ -160,6 +162,11 @@ const Toolbar = ({
               label: 'Port scan',
               hint: 'open ports',
               onSelect: runTool(onPortScan),
+            },
+            {
+              label: 'HTTP endpoints',
+              hint: 'headers · cookies · tech',
+              onSelect: runTool(onHttpAnalysis),
             },
             {
               label: 'Netcat',

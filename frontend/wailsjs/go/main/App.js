@@ -6,12 +6,20 @@ export function AnalyzeDomain(arg1) {
   return window['go']['main']['App']['AnalyzeDomain'](arg1);
 }
 
+export function AnalyzeEndpoints(arg1) {
+  return window['go']['main']['App']['AnalyzeEndpoints'](arg1);
+}
+
 export function Cancel() {
   return window['go']['main']['App']['Cancel']();
 }
 
 export function CancelDomainAnalysis() {
   return window['go']['main']['App']['CancelDomainAnalysis']();
+}
+
+export function CancelEndpointAnalysis() {
+  return window['go']['main']['App']['CancelEndpointAnalysis']();
 }
 
 export function CancelPortScan() {
@@ -48,6 +56,10 @@ export function DeleteHistory(arg1) {
 
 export function ExportDomainReport(arg1) {
   return window['go']['main']['App']['ExportDomainReport'](arg1);
+}
+
+export function ExportHTTPReport(arg1) {
+  return window['go']['main']['App']['ExportHTTPReport'](arg1);
 }
 
 export function ExportOriginReport(arg1) {

@@ -459,7 +459,300 @@ export namespace history {
 
 }
 
+export namespace httpcheck {
+	
+	export class CacheInfo {
+	    cacheControl?: string;
+	    directives?: string[];
+	    pragma?: string;
+	    expires?: string;
+	    age: number;
+	    etag?: string;
+	    lastModified?: string;
+	    vary?: string[];
+	    public: boolean;
+	    private: boolean;
+	    noStore: boolean;
+	    noCache: boolean;
+	    maxAge: number;
+	    sMaxAge: number;
+	    cacheable: boolean;
+	    shared: boolean;
+	    cdn?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CacheInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.cacheControl = source["cacheControl"];
+	        this.directives = source["directives"];
+	        this.pragma = source["pragma"];
+	        this.expires = source["expires"];
+	        this.age = source["age"];
+	        this.etag = source["etag"];
+	        this.lastModified = source["lastModified"];
+	        this.vary = source["vary"];
+	        this.public = source["public"];
+	        this.private = source["private"];
+	        this.noStore = source["noStore"];
+	        this.noCache = source["noCache"];
+	        this.maxAge = source["maxAge"];
+	        this.sMaxAge = source["sMaxAge"];
+	        this.cacheable = source["cacheable"];
+	        this.shared = source["shared"];
+	        this.cdn = source["cdn"];
+	    }
+	}
+	export class Check {
+	    id: string;
+	    category: string;
+	    title: string;
+	    status: string;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Check(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.category = source["category"];
+	        this.title = source["title"];
+	        this.status = source["status"];
+	        this.detail = source["detail"];
+	    }
+	}
+	export class Cookie {
+	    name: string;
+	    value?: string;
+	    domain?: string;
+	    path?: string;
+	    secure: boolean;
+	    httpOnly: boolean;
+	    sameSite?: string;
+	    session: boolean;
+	    expires?: number;
+	    maxAge?: number;
+	    tech?: string;
+	    flags?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Cookie(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.value = source["value"];
+	        this.domain = source["domain"];
+	        this.path = source["path"];
+	        this.secure = source["secure"];
+	        this.httpOnly = source["httpOnly"];
+	        this.sameSite = source["sameSite"];
+	        this.session = source["session"];
+	        this.expires = source["expires"];
+	        this.maxAge = source["maxAge"];
+	        this.tech = source["tech"];
+	        this.flags = source["flags"];
+	    }
+	}
+	export class Header {
+	    name: string;
+	    value: string;
+	    kind: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Header(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.value = source["value"];
+	        this.kind = source["kind"];
+	    }
+	}
+	export class Redirect {
+	    from: string;
+	    to: string;
+	    status: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Redirect(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.from = source["from"];
+	        this.to = source["to"];
+	        this.status = source["status"];
+	    }
+	}
+	export class TLSInfo {
+	    version?: string;
+	    cipher?: string;
+	    alpn?: string;
+	    subject?: string;
+	    issuer?: string;
+	    sans?: string[];
+	    notAfter?: number;
+	    daysLeft: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TLSInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.cipher = source["cipher"];
+	        this.alpn = source["alpn"];
+	        this.subject = source["subject"];
+	        this.issuer = source["issuer"];
+	        this.sans = source["sans"];
+	        this.notAfter = source["notAfter"];
+	        this.daysLeft = source["daysLeft"];
+	    }
+	}
+	export class Tech {
+	    name: string;
+	    category: string;
+	    evidence: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Tech(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.category = source["category"];
+	        this.evidence = source["evidence"];
+	    }
+	}
+	export class Report {
+	    url: string;
+	    finalUrl?: string;
+	    host?: string;
+	    status: number;
+	    https: boolean;
+	    contentType?: string;
+	    server?: string;
+	    headers?: Header[];
+	    checks: Check[];
+	    cookies?: Cookie[];
+	    caching: CacheInfo;
+	    tech?: Tech[];
+	    tls?: TLSInfo;
+	    redirects?: Redirect[];
+	    bodySize?: number;
+	    truncated?: boolean;
+	    error?: string;
+	    score: number;
+	    grade: string;
+	    analyzedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Report(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.finalUrl = source["finalUrl"];
+	        this.host = source["host"];
+	        this.status = source["status"];
+	        this.https = source["https"];
+	        this.contentType = source["contentType"];
+	        this.server = source["server"];
+	        this.headers = this.convertValues(source["headers"], Header);
+	        this.checks = this.convertValues(source["checks"], Check);
+	        this.cookies = this.convertValues(source["cookies"], Cookie);
+	        this.caching = this.convertValues(source["caching"], CacheInfo);
+	        this.tech = this.convertValues(source["tech"], Tech);
+	        this.tls = this.convertValues(source["tls"], TLSInfo);
+	        this.redirects = this.convertValues(source["redirects"], Redirect);
+	        this.bodySize = source["bodySize"];
+	        this.truncated = source["truncated"];
+	        this.error = source["error"];
+	        this.score = source["score"];
+	        this.grade = source["grade"];
+	        this.analyzedAt = source["analyzedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+
+}
+
 export namespace main {
+	
+	export class EndpointTarget {
+	    url: string;
+	    label?: string;
+	    source?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EndpointTarget(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.label = source["label"];
+	        this.source = source["source"];
+	    }
+	}
+	export class EndpointAnalysisRequest {
+	    targets: EndpointTarget[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EndpointAnalysisRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.targets = this.convertValues(source["targets"], EndpointTarget);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	export class HistorySaveRequest {
 	    kind: string;

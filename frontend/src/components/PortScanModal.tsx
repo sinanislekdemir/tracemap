@@ -114,6 +114,21 @@ function describePort(entry: PortOpenEvent, showHost: boolean): string {
   return `${prefix}${parts.join(' · ')}`;
 }
 
+// Web service hints used to offer the HTTP analyzer for a port's host.
+const WEB_PORTS = new Set([80, 3000, 5000, 5601, 8000, 8008, 8080, 8081, 8086, 8088, 8888, 9000, 9090, 9200, 15672, 443, 8443, 4443, 6443, 9443]);
+const WEB_HINT = /http|apache|nginx|iis|tomcat|jetty|caddy|envoy|traefik|gunicorn|uvicorn|werkzeug|openresty|litespeed/;
+
+function looksWeb(result: PortOpenEvent['result']): boolean {
+  if (result.protocol !== 'tcp') {
+    return false;
+  }
+  if (result.tls || WEB_PORTS.has(result.port)) {
+    return true;
+  }
+  const textual = `${result.service ?? ''} ${result.product ?? ''} ${result.banner ?? ''}`.toLowerCase();
+  return WEB_HINT.test(textual);
+}
+
 interface PortScanModalProps {
   open: boolean;
   host: string;
@@ -124,9 +139,23 @@ interface PortScanModalProps {
   onLog: (level: LogLevel, text: string) => void;
   /** Open the netcat tool preloaded with an open port. */
   onConnect: (host: string, port: number, tls?: boolean) => void;
+  /** Report the collected open ports so the app can derive HTTP endpoints. */
+  onResultsChange?: (results: PortOpenEvent[]) => void;
+  /** Open the HTTP endpoint analyzer for an open port's host. */
+  onAnalyzeHttp?: (host: string, label?: string) => void;
 }
 
-const PortScanModal = ({ open, host, label, targets, onClose, onLog, onConnect }: PortScanModalProps) => {
+const PortScanModal = ({
+  open,
+  host,
+  label,
+  targets,
+  onClose,
+  onLog,
+  onConnect,
+  onResultsChange,
+  onAnalyzeHttp,
+}: PortScanModalProps) => {
   const [options, setOptions] = useState<PortScanOptions>(DEFAULT_OPTIONS);
   const [phase, setPhase] = useState<Phase>('options');
   const [results, setResults] = useState<PortOpenEvent[]>([]);
@@ -173,6 +202,11 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog, onConnect }
     durationRef.current = 0;
     setOptions((previous) => ({ ...previous, scope: 'single' }));
   }, [open, host]);
+
+  // Report collected open ports upward so the app can derive web endpoints.
+  useEffect(() => {
+    onResultsChange?.(results);
+  }, [results, onResultsChange]);
 
   // The "all targets" scope is meaningless with fewer than two targets.
   useEffect(() => {
@@ -747,6 +781,16 @@ const PortScanModal = ({ open, host, label, targets, onClose, onLog, onConnect }
                                     <span className="port-banner" title={entry.result.detail || entry.result.banner}>
                                       {entry.result.detail || entry.result.banner}
                                     </span>
+                                  )}
+                                  {looksWeb(entry.result) && onAnalyzeHttp && (
+                                    <button
+                                      type="button"
+                                      className="port-http-btn"
+                                      title={`Analyze the HTTP endpoint at ${entry.host}`}
+                                      onClick={() => onAnalyzeHttp(entry.host, entry.label)}
+                                    >
+                                      HTTP
+                                    </button>
                                   )}
                                 </span>
                               </div>

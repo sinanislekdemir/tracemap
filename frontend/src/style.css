@@ -3561,20 +3561,112 @@ body {
 .field--target .input {
   padding-right: 120px;
 }
-.input-badge {
+.field--target .input--with-ports {
+  padding-right: 190px;
+}
+.input-badges {
   position: absolute;
   right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.input-badge {
   padding: 2px 8px;
   border-radius: 999px;
   font-family: var(--mono);
   font-size: 9px;
   letter-spacing: 0.08em;
-  pointer-events: none;
 }
 .input-badge--cidr {
   border: 1px solid var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
+}
+.input-badge--ports {
+  border: 1px solid var(--warn);
+  background: transparent;
+  color: var(--warn);
+}
+
+/* Hover/focus hint box listing the target formats the box accepts. */
+.field--target .field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.target-hint-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-faint);
+  font-size: 9px;
+  line-height: 1;
+  cursor: help;
+}
+.field--target:hover .target-hint-chip,
+.field--target:focus-within .target-hint-chip {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.target-hint {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  /* Above the offline Leaflet panes (z-index <= 1000) but below the floating
+     window layer (1500), so the hint is never hidden by the map. */
+  z-index: 1100;
+  display: none;
+  width: max-content;
+  max-width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+.field--target:hover .target-hint,
+.field--target:focus-within .target-hint {
+  display: block;
+}
+.target-hint-title {
+  margin-bottom: 6px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+}
+.target-hint-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.target-hint-key {
+  flex: 0 0 92px;
+  color: var(--text-faint);
+}
+.target-hint-val {
+  color: var(--text);
+}
+.target-hint-note {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.5;
 }
 
 .port-block-note {

@@ -86,8 +86,12 @@ type ScanRequest struct {
 // TraceBlockRequest discovers the live hosts in an IPv4 CIDR block and traces
 // each one. It is used when the target box holds a CIDR rather than a host.
 type TraceBlockRequest struct {
-	CIDR    string `json:"cidr"`
-	MaxHops int    `json:"maxHops"`
+	CIDR string `json:"cidr"`
+	// PortRange optionally lists the ports probed to discover live hosts,
+	// overriding the default top-100 list. It accepts the same comma-separated
+	// ports and ranges as a port scan (for example "22,80,443-445").
+	PortRange string `json:"portRange,omitempty"`
+	MaxHops   int    `json:"maxHops"`
 }
 
 // BlockLogEvent is a verbose CIDR block-discovery step, streamed to the UI.
@@ -696,10 +700,22 @@ func (a *App) TraceBlock(req TraceBlockRequest) error {
 		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
 	}
+	discoveryPorts := portscan.Top100
+	portsLabel := "top 100 ports"
+	if spec := strings.TrimSpace(req.PortRange); spec != "" {
+		parsed, err := portscan.ParsePorts(spec)
+		if err != nil {
+			message := fmt.Sprintf("invalid port list %q: %v", spec, err)
+			runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+			return errors.New(message)
+		}
+		discoveryPorts = parsed
+		portsLabel = fmt.Sprintf("%d port(s)", len(parsed))
+	}
 	total := hostscan.Count(network)
 	runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
 		Level:   "info",
-		Message: fmt.Sprintf("discovering live hosts in %s · %d addresses · top 100 ports", strings.TrimSpace(req.CIDR), total),
+		Message: fmt.Sprintf("discovering live hosts in %s · %d addresses · %s", strings.TrimSpace(req.CIDR), total, portsLabel),
 	})
 	if total > 65536 {
 		runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
@@ -708,7 +724,7 @@ func (a *App) TraceBlock(req TraceBlockRequest) error {
 		})
 	}
 
-	live, err := a.hs.Discover(ctx, network, hostscan.Options{Ports: portscan.Top100}, hostscan.Observer{
+	live, err := a.hs.Discover(ctx, network, hostscan.Options{Ports: discoveryPorts}, hostscan.Observer{
 		OnFound: func(host string, openPort int) {
 			runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
 				Level:   "ok",

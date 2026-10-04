@@ -80,28 +80,64 @@ const Toolbar = ({
       <div className="field field--target">
         <label className="field-label" htmlFor="target">
           TARGET / DOMAIN
+          <span className="target-hint-chip" aria-hidden="true">
+            ?
+          </span>
         </label>
         <div className="input-wrap">
           <span className="input-prompt">›</span>
           <input
             id="target"
-            className="input selectable"
+            className={`input selectable${cidr?.ports ? ' input--with-ports' : ''}`}
             type="text"
             value={target}
             spellCheck={false}
             autoComplete="off"
-            placeholder="hostname or IP address"
+            placeholder="hostname, IP or 10.0.0.0/24:22,80"
+            aria-describedby="target-hint"
             onChange={(event) => onTargetChange(event.target.value)}
             onKeyDown={onKeyDown}
           />
           {cidr && (
-            <span
-              className="input-badge input-badge--cidr"
-              title={`${cidr.network}/${cidr.prefix} · ${cidr.count.toLocaleString()} usable hosts`}
-            >
-              CIDR · {cidr.count.toLocaleString()}
+            <span className="input-badges">
+              <span
+                className="input-badge input-badge--cidr"
+                title={`${cidr.network}/${cidr.prefix} · ${cidr.count.toLocaleString()} usable hosts`}
+              >
+                CIDR · {cidr.count.toLocaleString()}
+              </span>
+              {cidr.ports && (
+                <span
+                  className="input-badge input-badge--ports"
+                  title={`Explicit ports · ${cidr.portCount.toLocaleString()} port(s): ${cidr.ports}`}
+                >
+                  PORTS · {cidr.portCount.toLocaleString()}
+                </span>
+              )}
             </span>
           )}
+          <div className="target-hint" id="target-hint">
+            <div className="target-hint-title">ACCEPTED TARGETS</div>
+            <div className="target-hint-row">
+              <span className="target-hint-key">Hostname</span>
+              <span className="target-hint-val">example.com</span>
+            </div>
+            <div className="target-hint-row">
+              <span className="target-hint-key">IPv4 address</span>
+              <span className="target-hint-val">203.0.113.10</span>
+            </div>
+            <div className="target-hint-row">
+              <span className="target-hint-key">CIDR block</span>
+              <span className="target-hint-val">10.0.0.0/24</span>
+            </div>
+            <div className="target-hint-row">
+              <span className="target-hint-key">CIDR + ports</span>
+              <span className="target-hint-val">10.0.0.0/24:22,80,443-445</span>
+            </div>
+            <div className="target-hint-note">
+              Ports accept single ports and ranges; block targets switch Trace/Scan to whole-block mode.
+            </div>
+          </div>
         </div>
       </div>
 
@@ -130,7 +166,9 @@ const Toolbar = ({
         disabled={isLoading}
         title={
           cidr
-            ? 'CIDR block: trace live hosts / scan the block on the most common 100 ports'
+            ? cidr.ports
+              ? `CIDR block: trace live hosts / scan the block on ${cidr.portCount.toLocaleString()} explicit port(s)`
+              : 'CIDR block: trace live hosts / scan the block on the most common 100 ports'
             : 'Resolve all DNS records and trace each address'
         }
       >

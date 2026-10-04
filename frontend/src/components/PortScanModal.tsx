@@ -143,9 +143,14 @@ interface PortScanModalProps {
   targets: PortScanTarget[];
   /**
    * When set, the modal runs in block mode: it skips the options screen and
-   * port-scans every usable address in this IPv4 CIDR block (top 100 ports).
+   * port-scans every usable address in this IPv4 CIDR block.
    */
   cidr?: string;
+  /**
+   * Explicit port spec for a block scan (from a "CIDR:ports" target). When
+   * omitted the block scan uses the top-100 preset.
+   */
+  ports?: string;
   /** Start the scan as soon as the modal opens (used for CIDR blocks). */
   autoStart?: boolean;
   onClose: () => void;
@@ -164,6 +169,7 @@ const PortScanModal = ({
   label,
   targets,
   cidr,
+  ports,
   autoStart,
   onClose,
   onLog,
@@ -173,10 +179,14 @@ const PortScanModal = ({
 }: PortScanModalProps) => {
   const blockMode = Boolean(cidr);
   const blockOptions = useMemo<PortScanOptions>(
-    () => ({ ...DEFAULT_OPTIONS, preset: 'top100', scope: 'single' }),
-    [],
+    () =>
+      ports
+        ? { ...DEFAULT_OPTIONS, preset: 'custom', portRange: ports, scope: 'single' }
+        : { ...DEFAULT_OPTIONS, preset: 'top100', scope: 'single' },
+    [ports],
   );
   const blockHosts = useMemo(() => parseCIDR(cidr ?? '')?.count ?? 0, [cidr]);
+  const blockPortCount = useMemo(() => (ports ? countPorts(ports) : 100), [ports]);
   const [options, setOptions] = useState<PortScanOptions>(DEFAULT_OPTIONS);
   const [phase, setPhase] = useState<Phase>('options');
   const [results, setResults] = useState<PortOpenEvent[]>([]);
@@ -496,7 +506,7 @@ const PortScanModal = ({
       subtitle={
         blockMode ? (
           <>
-            IPv4 block · {cidr}
+            IPv4 block · {cidr} · {ports ? `${blockPortCount.toLocaleString()} ports` : 'top 100'}
           </>
         ) : (
           <>
@@ -734,7 +744,12 @@ const PortScanModal = ({
                   <span className="port-block-label">CIDR BLOCK</span>
                   <span className="port-block-cidr selectable">{cidr}</span>
                   <span className="port-block-count">
-                    {blockHosts.toLocaleString()} addresses · top 100 ports
+                    {blockHosts.toLocaleString()} addresses ·{' '}
+                    {ports ? (
+                      <span title={ports}>{blockPortCount.toLocaleString()} explicit ports</span>
+                    ) : (
+                      'top 100 ports'
+                    )}
                   </span>
                 </div>
               )}

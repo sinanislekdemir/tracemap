@@ -1170,6 +1170,7 @@ export namespace main {
 	}
 	export class TraceBlockRequest {
 	    cidr: string;
+	    portRange?: string;
 	    maxHops: number;
 	
 	    static createFrom(source: any = {}) {
@@ -1179,6 +1180,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.cidr = source["cidr"];
+	        this.portRange = source["portRange"];
 	        this.maxHops = source["maxHops"];
 	    }
 	}

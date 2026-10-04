@@ -152,11 +152,13 @@ function endpointFromPort(entry: PortOpenEvent): string | null {
 
 // PortScanDialog is the state that opens the port scanner. For a CIDR target,
 // Cidr is set and the modal skips its options screen, auto-starting a block
-// scan over the most common ports.
+// scan over the most common ports. When the target carried an explicit
+// ":ports" suffix, Ports holds that spec and the block scan uses it instead.
 interface PortScanDialog {
   host: string;
   label: string;
   cidr?: string;
+  ports?: string;
   autoStart?: boolean;
 }
 
@@ -607,14 +609,19 @@ const App = () => {
     if (cidr) {
       // Trace a whole IPv4 block: discover live hosts, then trace each one.
       // Multi-target, so it uses the scan pipeline (scan:targets/scan:done).
+      // An explicit ":ports" suffix steers live-host discovery.
+      const blockCidr = `${cidr.network}/${cidr.prefix}`;
+      const portsLabel = cidr.ports ? ` · ports ${cidr.ports}` : '';
       startOperation('scan');
       setScanCompleted(false);
       setLastTarget(trimmed);
       setScanDomain('');
       openWindow('trace', { title: `TRACE · ${trimmed}` });
-      appendLog('info', `▶ block trace ${trimmed} · /${cidr.prefix} · ${cidr.count} hosts · max ${maxHops} hops`, 'trace');
-      appendLog('info', `▶ block trace ${trimmed} · /${cidr.prefix} · ${cidr.count} hosts`, 'console');
-      TraceBlock(main.TraceBlockRequest.createFrom({ cidr: trimmed, maxHops })).catch(() => {
+      appendLog('info', `▶ block trace ${trimmed} · /${cidr.prefix} · ${cidr.count} hosts${portsLabel} · max ${maxHops} hops`, 'trace');
+      appendLog('info', `▶ block trace ${trimmed} · /${cidr.prefix} · ${cidr.count} hosts${portsLabel}`, 'console');
+      TraceBlock(
+        main.TraceBlockRequest.createFrom({ cidr: blockCidr, portRange: cidr.ports ?? '', maxHops }),
+      ).catch(() => {
         // Failures are surfaced through the trace:error event.
       });
       return;
@@ -641,11 +648,19 @@ const App = () => {
       setError('Enter a domain to scan.');
       return;
     }
-    if (parseCIDR(trimmed)) {
+    const block = parseCIDR(trimmed);
+    if (block) {
       // A CIDR block has no DNS records to discover: skip the scan options and
-      // go straight to a top-100 port scan of the whole block.
+      // go straight to a port scan of the whole block (top 100, or the explicit
+      // ports from a "CIDR:ports" suffix).
       setError(null);
-      setPortScan({ host: trimmed, label: trimmed, cidr: trimmed, autoStart: true });
+      setPortScan({
+        host: trimmed,
+        label: trimmed,
+        cidr: `${block.network}/${block.prefix}`,
+        ports: block.ports,
+        autoStart: true,
+      });
       return;
     }
     setError(null);
@@ -659,8 +674,15 @@ const App = () => {
       return;
     }
     setError(null);
-    if (parseCIDR(trimmed)) {
-      setPortScan({ host: trimmed, label: trimmed, cidr: trimmed, autoStart: true });
+    const block = parseCIDR(trimmed);
+    if (block) {
+      setPortScan({
+        host: trimmed,
+        label: trimmed,
+        cidr: `${block.network}/${block.prefix}`,
+        ports: block.ports,
+        autoStart: true,
+      });
       return;
     }
     setPortScan({ host: trimmed, label: trimmed });
@@ -1622,6 +1644,7 @@ const App = () => {
         host={portScan?.host ?? ''}
         label={portScan?.label}
         cidr={portScan?.cidr}
+        ports={portScan?.ports}
         autoStart={portScan?.autoStart}
         targets={portScanTargets}
         onClose={() => setPortScan(null)}

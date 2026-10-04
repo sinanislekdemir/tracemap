@@ -1,9 +1,11 @@
 package portscan
 
 import (
+	"bufio"
 	"crypto/tls"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,12 +32,25 @@ var httpPorts = map[int]bool{
 	9090: true, 9200: true, 15672: true,
 }
 
+// ftpPorts are ports where an FTP control connection is the expected first
+// exchange. On these ports the anonymous-login check runs against whatever
+// answers, even if the greeting does not name FTP.
+var ftpPorts = map[int]bool{21: true}
+
+// ftpServerNames are tokens that commonly appear in an FTP 220 greeting. A
+// match yields a short product label in addition to the raw banner.
+var ftpServerNames = []string{
+	"vsftpd", "proftpd", "pure-ftpd", "filezilla", "serv-u",
+	"wu-ftpd", "microsoft ftp", "cerberus ftp", "glftpd",
+}
+
 // probeResult is the outcome of identifying a service on an open port.
 type probeResult struct {
-	Product string
-	Banner  string
-	Detail  string
-	TLS     bool
+	Product      string
+	Banner       string
+	Detail       string
+	TLS          bool
+	FTPAnonymous *bool
 }
 
 // probeConn identifies the protocol speaking on conn. It is best-effort: an
@@ -46,6 +61,12 @@ type probeResult struct {
 // probe can leave the first connection in an unknown state.
 func probeConn(conn net.Conn, host string, port int, dial func() (net.Conn, error)) probeResult {
 	switch {
+	case ftpPorts[port]:
+		if result, ok := probeFTP(conn, false); ok {
+			return result
+		}
+		result, _ := probeBanner(conn)
+		return result
 	case tlsPorts[port]:
 		if result, ok := probeTLS(conn, host); ok {
 			return result
@@ -60,6 +81,11 @@ func probeConn(conn net.Conn, host string, port int, dial func() (net.Conn, erro
 		return result
 	default:
 		if result, ok := probeBanner(conn); ok {
+			// A service that greets with an FTP 220 banner may run on a
+			// non-standard port; offer the anonymous check there too.
+			if isFTPGreeting(result.Banner) {
+				return probeAnonymous(bufio.NewReader(conn), conn, result)
+			}
 			return result
 		}
 		// TLS before HTTP: an HTTP server that receives a TLS ClientHello
@@ -105,6 +131,140 @@ func probeBanner(conn net.Conn) (probeResult, bool) {
 		return probeResult{}, false
 	}
 	return probeResult{Banner: banner}, true
+}
+
+// probeFTP reads an FTP greeting and tests anonymous login. When requireKeyword
+// is set the greeting must name FTP (for non-standard ports); on the FTP port a
+// 220 greeting is enough. It returns the result and whether a greeting was read.
+func probeFTP(conn net.Conn, requireKeyword bool) (probeResult, bool) {
+	_ = conn.SetDeadline(time.Now().Add(probeTimeout))
+	reader := bufio.NewReader(conn)
+	code, text, err := readFTPReply(reader)
+	banner := sanitizeBanner([]byte(text))
+	if banner == "" {
+		return probeResult{}, false
+	}
+	result := probeResult{Banner: banner}
+	if err != nil || code != 220 {
+		return result, true
+	}
+	if requireKeyword && !strings.Contains(strings.ToLower(banner), "ftp") {
+		return result, true
+	}
+	return probeAnonymous(reader, conn, result), true
+}
+
+// probeAnonymous attempts an anonymous FTP login on a control connection whose
+// greeting has already been read, layering the product label and the login
+// verdict onto result.
+func probeAnonymous(reader *bufio.Reader, conn net.Conn, result probeResult) probeResult {
+	if product := ftpProduct(result.Banner); product != "" {
+		result.Product = product
+	}
+	if allowed, checked := ftpAnonymous(reader, conn); checked {
+		result.FTPAnonymous = &allowed
+	}
+	return result
+}
+
+// ftpAnonymous sends USER anonymous (and, if challenged, PASS) and reports
+// whether the server accepted the login and whether it replied to FTP commands
+// at all.
+func ftpAnonymous(reader *bufio.Reader, conn net.Conn) (allowed, checked bool) {
+	_ = conn.SetDeadline(time.Now().Add(probeTimeout))
+	if _, err := io.WriteString(conn, "USER anonymous\r\n"); err != nil {
+		return false, false
+	}
+	code, _, err := readFTPReply(reader)
+	if err != nil {
+		return false, false
+	}
+	// 230 means the server logged us in without a password; some servers
+	// answer 202 or another 2xx to USER anonymous.
+	if code >= 200 && code < 300 {
+		return true, true
+	}
+	// 331/332 is the password challenge; anything else is a refusal.
+	if code != 331 && code != 332 {
+		return false, true
+	}
+	if _, err := io.WriteString(conn, "PASS anonymous@traceroute.invalid\r\n"); err != nil {
+		return false, true
+	}
+	code, _, err = readFTPReply(reader)
+	if err != nil {
+		return false, true
+	}
+	return code >= 200 && code < 300, true
+}
+
+// isFTPGreeting reports whether a banner looks like an FTP 220 greeting.
+func isFTPGreeting(banner string) bool {
+	trimmed := strings.TrimSpace(banner)
+	if !strings.HasPrefix(trimmed, "220") {
+		return false
+	}
+	return strings.Contains(strings.ToLower(trimmed), "ftp")
+}
+
+// ftpProduct extracts a short server name from an FTP greeting, or "".
+func ftpProduct(banner string) string {
+	lower := strings.ToLower(banner)
+	for _, name := range ftpServerNames {
+		idx := strings.Index(lower, name)
+		if idx < 0 {
+			continue
+		}
+		product := strings.TrimSpace(banner[idx:])
+		if end := strings.IndexAny(product, ")\r\n"); end >= 0 {
+			product = strings.TrimSpace(product[:end])
+		}
+		if len(product) > bannerLimit {
+			product = product[:bannerLimit]
+		}
+		return product
+	}
+	return ""
+}
+
+// readFTPReply reads one FTP reply, folding multiline replies into a single
+// line, and returns its numeric code and text. A code of 0 means the reply did
+// not start with a three-digit code.
+func readFTPReply(reader *bufio.Reader) (int, string, error) {
+	first, err := reader.ReadString('\n')
+	text := strings.TrimRight(first, "\r\n")
+	if err != nil {
+		return 0, text, err
+	}
+	code := ftpReplyCode(text)
+	if code == 0 || len(text) < 4 || text[3] != '-' {
+		return code, text, nil
+	}
+	// Multiline reply: keep reading until the closing "NNN " line.
+	lines := []string{text}
+	for {
+		line, err := reader.ReadString('\n')
+		line = strings.TrimRight(line, "\r\n")
+		lines = append(lines, line)
+		if err != nil {
+			return code, strings.Join(lines, " "), err
+		}
+		if len(line) >= 4 && line[3] == ' ' && ftpReplyCode(line) == code {
+			return code, strings.Join(lines, " "), nil
+		}
+	}
+}
+
+// ftpReplyCode parses the three-digit code at the start of an FTP reply line.
+func ftpReplyCode(line string) int {
+	if len(line) < 3 {
+		return 0
+	}
+	code, err := strconv.Atoi(line[:3])
+	if err != nil {
+		return 0
+	}
+	return code
 }
 
 // probeHTTP sends a minimal GET and parses the status line and Server header.

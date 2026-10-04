@@ -52,6 +52,10 @@ type Result struct {
 	Banner   string `json:"banner,omitempty"`
 	Detail   string `json:"detail,omitempty"`
 	TLS      bool   `json:"tls,omitempty"`
+	// FTPAnonymous reports whether an FTP service accepted an anonymous login.
+	// It is nil when no FTP login was attempted (the port is not FTP, or
+	// identification was disabled).
+	FTPAnonymous *bool `json:"ftpAnonymous,omitempty"`
 }
 
 // Observer receives scan progress. Every callback is optional.
@@ -208,6 +212,7 @@ func (s *Scanner) scanPort(ctx context.Context, ip, host string, port int, proto
 		result.Banner = pr.Banner
 		result.Detail = pr.Detail
 		result.TLS = pr.TLS
+		result.FTPAnonymous = pr.FTPAnonymous
 	}
 	return result, true
 }

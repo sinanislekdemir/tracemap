@@ -23,6 +23,7 @@ import (
 	"traceroute/internal/history"
 	"traceroute/internal/hostscan"
 	"traceroute/internal/httpcheck"
+	"traceroute/internal/ipblocks"
 	"traceroute/internal/netcat"
 	"traceroute/internal/netutil"
 	"traceroute/internal/origin"
@@ -34,35 +35,36 @@ import (
 
 // Event names emitted to the frontend.
 const (
-	EventHop            = "trace:hop"
-	EventGeo            = "trace:geo"
-	EventTarget         = "trace:target"
-	EventTargetGeo      = "trace:targetGeo"
-	EventDone           = "trace:done"
-	EventError          = "trace:error"
-	EventScanRecords    = "scan:records"
-	EventScanTargets    = "scan:targets"
-	EventScanDone       = "scan:done"
-	EventSubdomains     = "scan:subdomains"
-	EventSubdomainLog   = "scan:subdomainLog"
-	EventScanProgress   = "scan:progress"
-	EventCrawlPage      = "scan:crawlPage"
-	EventCrawl          = "scan:crawl"
-	EventCrawlLog       = "scan:crawlLog"
-	EventPortOpen       = "portscan:open"
-	EventPortProgress   = "portscan:progress"
-	EventPortDone       = "portscan:done"
-	EventPortError      = "portscan:error"
-	EventNetData        = "net:data"
-	EventNetClosed      = "net:closed"
-	EventNetError       = "net:error"
-	EventDomainProgress = "domain:progress"
-	EventOriginProgress = "origin:progress"
-	EventOriginLog      = "origin:log"
-	EventHTTPProgress   = "http:progress"
-	EventHTTPLog        = "http:log"
-	EventHTTPResult     = "http:result"
-	EventBlockLog       = "block:log"
+	EventHop              = "trace:hop"
+	EventGeo              = "trace:geo"
+	EventTarget           = "trace:target"
+	EventTargetGeo        = "trace:targetGeo"
+	EventDone             = "trace:done"
+	EventError            = "trace:error"
+	EventScanRecords      = "scan:records"
+	EventScanTargets      = "scan:targets"
+	EventScanDone         = "scan:done"
+	EventSubdomains       = "scan:subdomains"
+	EventSubdomainLog     = "scan:subdomainLog"
+	EventScanProgress     = "scan:progress"
+	EventCrawlPage        = "scan:crawlPage"
+	EventCrawl            = "scan:crawl"
+	EventCrawlLog         = "scan:crawlLog"
+	EventPortOpen         = "portscan:open"
+	EventPortProgress     = "portscan:progress"
+	EventPortDone         = "portscan:done"
+	EventPortError        = "portscan:error"
+	EventNetData          = "net:data"
+	EventNetClosed        = "net:closed"
+	EventNetError         = "net:error"
+	EventDomainProgress   = "domain:progress"
+	EventOriginProgress   = "origin:progress"
+	EventOriginLog        = "origin:log"
+	EventHTTPProgress     = "http:progress"
+	EventHTTPLog          = "http:log"
+	EventHTTPResult       = "http:result"
+	EventBlockLog         = "block:log"
+	EventIPBlocksProgress = "ipblocks:progress"
 )
 
 // scanConcurrency limits how many traces an advanced scan runs at once.
@@ -202,6 +204,9 @@ type PortScanRow struct {
 	Detail   string `json:"detail,omitempty"`
 	Banner   string `json:"banner,omitempty"`
 	TLS      bool   `json:"tls,omitempty"`
+	// FTPAnonymous is true when an FTP service accepted an anonymous login,
+	// false when it required authentication, and nil when not checked.
+	FTPAnonymous *bool `json:"ftpAnonymous,omitempty"`
 }
 
 // PortScanTargetInfo identifies one resolved target in a port-scan report.
@@ -229,6 +234,46 @@ type PortScanReport struct {
 	Targets         int                  `json:"targets"`
 	ResolvedTargets []PortScanTargetInfo `json:"resolvedTargets"`
 	Rows            []PortScanRow        `json:"rows"`
+}
+
+// IPBlocksInfo describes the local GeoLite2 database backing the country IP
+// block browser.
+type IPBlocksInfo struct {
+	Available bool   `json:"available"`
+	Path      string `json:"path,omitempty"`
+	Database  string `json:"database,omitempty"`
+	Build     string `json:"build,omitempty"`
+	IPVersion int    `json:"ipVersion,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+// CountryBlocksRequest selects the network blocks to return: a country code, an
+// optional address family ("", "ipv4", "ipv6"), an optional substring filter
+// and a page size.
+type CountryBlocksRequest struct {
+	Country string `json:"country"`
+	Family  string `json:"family,omitempty"`
+	Filter  string `json:"filter,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+}
+
+// CountryBlocksResult is one page of a country's network blocks.
+type CountryBlocksResult struct {
+	Country   string   `json:"country"`
+	Family    string   `json:"family,omitempty"`
+	Filter    string   `json:"filter,omitempty"`
+	Total     int      `json:"total"`
+	Matched   int      `json:"matched"`
+	Addresses string   `json:"addresses"`
+	Blocks    []string `json:"blocks"`
+	Truncated bool     `json:"truncated"`
+}
+
+// IPBlocksProgressEvent reports progress while the local database is walked.
+type IPBlocksProgressEvent struct {
+	Phase string `json:"phase"`
+	Done  int    `json:"done"`
+	Total int    `json:"total"`
 }
 
 // NetConnectRequest opens an interactive, line-oriented TCP session (netcat).
@@ -383,6 +428,7 @@ type App struct {
 	nc     *netcat.Manager
 	domain *domaincheck.Analyzer
 	hs     *hostscan.Scanner
+	ipb    *ipblocks.DB
 
 	// Each independent operation family owns a canceler so a run cannot
 	// accidentally clear a newer run's cancellation handle.
@@ -391,6 +437,7 @@ type App struct {
 	domainOps canceler
 	originOps canceler
 	httpOps   canceler
+	ipbOps    canceler
 }
 
 // NewApp creates the application backend.
@@ -421,6 +468,13 @@ func NewApp() *App {
 		app.subs = subStore
 	}
 
+	if db, err := ipblocks.Open(); err != nil {
+		log.Printf("ipblocks: unavailable: %v", err)
+	} else {
+		app.ipb = db
+		log.Printf("ipblocks: %s", db.Path())
+	}
+
 	return app
 }
 
@@ -434,6 +488,9 @@ func (a *App) shutdown(ctx context.Context) {
 	_ = a.geo.Close()
 	_ = a.hist.Close()
 	_ = a.subs.Close()
+	if a.ipb != nil {
+		_ = a.ipb.Close()
+	}
 	a.nc.CloseAll()
 }
 
@@ -1514,6 +1571,13 @@ func formatPortScanRow(row PortScanRow) string {
 	if row.Banner != "" && row.Banner != row.Detail {
 		fmt.Fprintf(&b, "      banner: %s\n", oneLine(row.Banner))
 	}
+	if row.FTPAnonymous != nil {
+		status := "authentication required"
+		if *row.FTPAnonymous {
+			status = "ANONYMOUS LOGIN ALLOWED"
+		}
+		fmt.Fprintf(&b, "      anonymous FTP: %s\n", status)
+	}
 	return b.String()
 }
 
@@ -1635,6 +1699,156 @@ func (a *App) DeleteGeoCacheEntry(ip string) error {
 // ClearGeoCache removes every cached geolocation reply.
 func (a *App) ClearGeoCache() error {
 	return a.geo.ClearCache(a.ctx)
+}
+
+// errNoCountryDatabase is returned by the country-block methods when no local
+// GeoLite2 database could be opened.
+var errNoCountryDatabase = errors.New("no local GeoLite2 database available")
+
+// IPBlocksInfo reports the local GeoLite2 database used by the country IP
+// block browser.
+func (a *App) IPBlocksInfo() IPBlocksInfo {
+	if a.ipb == nil {
+		return IPBlocksInfo{Message: "No local GeoLite2 Country or City database was found."}
+	}
+	meta := a.ipb.Metadata()
+	info := IPBlocksInfo{
+		Available: true,
+		Path:      meta.Path,
+		Database:  meta.Database,
+		IPVersion: meta.IPVersion,
+	}
+	if !meta.BuildTime.IsZero() {
+		info.Build = meta.BuildTime.Format("2006-01-02")
+	}
+	return info
+}
+
+// ListCountryBlocks walks the local GeoLite2 database and returns the number of
+// network blocks owned by each country, most blocks first.
+func (a *App) ListCountryBlocks() ([]ipblocks.Country, error) {
+	if a.ipb == nil {
+		return nil, errNoCountryDatabase
+	}
+	ctx, end := a.ipbOps.begin(a.ctx)
+	defer end()
+	return a.ipb.Countries(ctx, a.ipbProgress("countries"))
+}
+
+// QueryCountryBlocks returns one page of a country's network blocks, filtered
+// by address family and a CIDR substring.
+func (a *App) QueryCountryBlocks(req CountryBlocksRequest) (CountryBlocksResult, error) {
+	if a.ipb == nil {
+		return CountryBlocksResult{}, errNoCountryDatabase
+	}
+	ctx, end := a.ipbOps.begin(a.ctx)
+	defer end()
+
+	page, err := a.ipb.Query(ctx, req.Country, ipblocks.Query{
+		Family: req.Family,
+		Filter: req.Filter,
+		Limit:  req.Limit,
+	}, a.ipbProgress("blocks"))
+	if err != nil {
+		return CountryBlocksResult{}, err
+	}
+	return CountryBlocksResult{
+		Country:   strings.ToUpper(strings.TrimSpace(req.Country)),
+		Family:    req.Family,
+		Filter:    req.Filter,
+		Total:     page.Total,
+		Matched:   page.Matched,
+		Addresses: page.Addresses,
+		Blocks:    page.Blocks,
+		Truncated: page.Truncated,
+	}, nil
+}
+
+// ReleaseCountryBlocks cancels any running walk and drops the cached country
+// block list, freeing its memory when the browser closes.
+func (a *App) ReleaseCountryBlocks() {
+	a.ipbOps.stop()
+	if a.ipb != nil {
+		a.ipb.ClearCache()
+	}
+}
+
+// ExportCountryBlocks writes a country's matching network blocks as a plain
+// CIDR list with a summary header, to a path chosen by the user. It returns the
+// path (empty when cancelled).
+func (a *App) ExportCountryBlocks(req CountryBlocksRequest) (string, error) {
+	if a.ipb == nil {
+		return "", errNoCountryDatabase
+	}
+	ctx, end := a.ipbOps.begin(a.ctx)
+	defer end()
+
+	prefixes, err := a.ipb.Blocks(ctx, req.Country, a.ipbProgress("export"))
+	if err != nil {
+		return "", err
+	}
+	// Limit -1 keeps every match (an export is not paged).
+	page := ipblocks.Paginate(prefixes, ipblocks.Query{
+		Family: req.Family,
+		Filter: req.Filter,
+		Limit:  -1,
+	})
+	name := strings.ToUpper(strings.TrimSpace(req.Country))
+	if name == "" {
+		name = "unknown"
+	}
+	name = strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(name)
+	return a.saveTextReport("Save country IP blocks", name+"-ip-blocks.txt", formatCountryBlocksReport(req, page))
+}
+
+// ipbProgress forwards database-walk progress to the frontend.
+func (a *App) ipbProgress(phase string) ipblocks.ProgressFunc {
+	return func(done, total int) {
+		runtime.EventsEmit(a.ctx, EventIPBlocksProgress, IPBlocksProgressEvent{
+			Phase: phase, Done: done, Total: total,
+		})
+	}
+}
+
+// formatCountryBlocksReport renders a country's blocks as a plain CIDR list
+// preceded by a summary header.
+func formatCountryBlocksReport(req CountryBlocksRequest, page ipblocks.Page) string {
+	var b strings.Builder
+	b.WriteString("COUNTRY IP BLOCKS\n")
+	b.WriteString("=================\n\n")
+
+	country := strings.ToUpper(strings.TrimSpace(req.Country))
+	if country == "" {
+		country = "—"
+	}
+	filter := strings.TrimSpace(req.Filter)
+	if filter == "" {
+		filter = "—"
+	}
+	fmt.Fprintf(&b, "Country:   %s\n", country)
+	fmt.Fprintf(&b, "Family:    %s\n", reportFamilyLabel(req.Family))
+	fmt.Fprintf(&b, "Filter:    %s\n", filter)
+	fmt.Fprintf(&b, "Blocks:    %d\n", page.Matched)
+	fmt.Fprintf(&b, "Addresses: %s\n", page.Addresses)
+	fmt.Fprintf(&b, "Generated: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
+
+	for _, block := range page.Blocks {
+		b.WriteString(block)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// reportFamilyLabel renders an address-family filter for a report.
+func reportFamilyLabel(family string) string {
+	switch strings.ToLower(strings.TrimSpace(family)) {
+	case "ipv4", "v4":
+		return "IPv4"
+	case "ipv6", "v6":
+		return "IPv6"
+	default:
+		return "all"
+	}
 }
 
 // filterUnroutable drops IPv6 targets when this host has no global IPv6

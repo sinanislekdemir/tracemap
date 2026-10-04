@@ -107,6 +107,11 @@ function describePort(entry: PortOpenEvent, showHost: boolean): string {
   if (result.tls) {
     parts.push('TLS');
   }
+  if (result.ftpAnonymous === true) {
+    parts.push('ANON FTP');
+  } else if (result.ftpAnonymous === false) {
+    parts.push('FTP auth required');
+  }
   const extra = result.detail || result.banner;
   if (extra) {
     parts.push(extra);
@@ -446,6 +451,7 @@ const PortScanModal = ({
         detail: entry.result.detail ?? '',
         banner: entry.result.banner ?? '',
         tls: entry.result.tls ?? false,
+        ftpAnonymous: entry.result.ftpAnonymous,
       }),
     );
     const report = main.PortScanReport.createFrom({
@@ -660,7 +666,8 @@ const PortScanModal = ({
                   <span className="scan-option-main">
                     <span className="scan-option-label">Identify protocols</span>
                     <span className="scan-option-hint">
-                      Banner grab, HTTP request and TLS handshake on TCP ports; protocol-specific replies on UDP
+                      Banner grab, HTTP request and TLS handshake on TCP ports; anonymous-login check on FTP;
+                      protocol-specific replies on UDP
                     </span>
                   </span>
                 </label>
@@ -849,6 +856,22 @@ const PortScanModal = ({
                                     <span className="port-product">{entry.result.product}</span>
                                   )}
                                   {entry.result.tls && <span className="port-tag">TLS</span>}
+                                  {entry.result.ftpAnonymous === true && (
+                                    <span
+                                      className="port-tag port-tag--warn"
+                                      title="Anonymous FTP login succeeded"
+                                    >
+                                      ANON FTP
+                                    </span>
+                                  )}
+                                  {entry.result.ftpAnonymous === false && (
+                                    <span
+                                      className="port-tag"
+                                      title="Anonymous FTP login refused; authentication required"
+                                    >
+                                      FTP AUTH
+                                    </span>
+                                  )}
                                   {(entry.result.detail || entry.result.banner) && (
                                     <span className="port-banner" title={entry.result.detail || entry.result.banner}>
                                       {entry.result.detail || entry.result.banner}

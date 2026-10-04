@@ -27,6 +27,7 @@ const VARIANT_WIDTHS: Record<string, number> = {
   'modal--http': 720,
   'modal--tool': 540,
   'modal--geocache': 720,
+  'modal--ipblocks': 820,
 };
 
 // Modal dialogs behave like the floating terminal windows: draggable,

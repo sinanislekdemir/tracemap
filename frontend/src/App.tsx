@@ -28,6 +28,7 @@ import FloatingWindow from './components/FloatingWindow';
 import GeoCacheModal from './components/GeoCacheModal';
 import HistoryModal from './components/HistoryModal';
 import HopList from './components/HopList';
+import IPBlocksModal from './components/IPBlocksModal';
 import MissingToolModal from './components/MissingToolModal';
 import NetcatPanel from './components/NetcatPanel';
 import OriginModal from './components/OriginModal';
@@ -187,6 +188,7 @@ const App = () => {
   const [geocacheEntries, setGeocacheEntries] = useState<GeoCacheEntry[]>([]);
   const [geocacheInfo, setGeocacheInfo] = useState<GeoCacheInfo | null>(null);
   const [geocacheLoading, setGeocacheLoading] = useState(false);
+  const [ipblocksOpen, setIpblocksOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'live' | 'history' | 'correlate'>('live');
   const [toast, setToast] = useState<string | null>(null);
   const [toolError, setToolError] = useState<{ message: string; hint: string } | null>(null);
@@ -827,6 +829,10 @@ const App = () => {
     void refreshGeoCache();
   }, [refreshGeoCache]);
 
+  const handleOpenCountryBlocks = useCallback(() => {
+    setIpblocksOpen(true);
+  }, []);
+
   const handleDeleteGeoCacheEntry = useCallback(
     (ip: string) => {
       DeleteGeoCacheEntry(ip)
@@ -1301,6 +1307,7 @@ const App = () => {
         onNet={() => openNetcat(target.trim())}
         onConsole={openConsole}
         onGeoCache={handleOpenGeoCache}
+        onCountryBlocks={handleOpenCountryBlocks}
         onCancel={handleCancel}
         onHistory={handleOpenHistory}
         onAddToHistory={handleAddToHistory}
@@ -1590,6 +1597,8 @@ const App = () => {
         onDelete={handleDeleteGeoCacheEntry}
         onClear={handleClearGeoCache}
       />
+
+      <IPBlocksModal open={ipblocksOpen} onClose={() => setIpblocksOpen(false)} />
 
       <MissingToolModal
         open={toolError != null}

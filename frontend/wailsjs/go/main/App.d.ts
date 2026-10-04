@@ -5,6 +5,7 @@ import {main} from '../models';
 import {httpcheck} from '../models';
 import {origin} from '../models';
 import {geolocator} from '../models';
+import {ipblocks} from '../models';
 import {history} from '../models';
 
 export function AnalyzeDomain(arg1:string):Promise<domaincheck.Report>;
@@ -33,6 +34,8 @@ export function DeleteGeoCacheEntry(arg1:string):Promise<void>;
 
 export function DeleteHistory(arg1:number):Promise<void>;
 
+export function ExportCountryBlocks(arg1:main.CountryBlocksRequest):Promise<string>;
+
 export function ExportDomainReport(arg1:domaincheck.Report):Promise<string>;
 
 export function ExportHTTPReport(arg1:Array<httpcheck.Report>):Promise<string>;
@@ -42,6 +45,10 @@ export function ExportOriginReport(arg1:origin.Report):Promise<string>;
 export function ExportPortScanReport(arg1:main.PortScanReport):Promise<string>;
 
 export function GeoCacheInfo():Promise<geolocator.CacheInfo>;
+
+export function IPBlocksInfo():Promise<main.IPBlocksInfo>;
+
+export function ListCountryBlocks():Promise<Array<ipblocks.Country>>;
 
 export function ListGeoCache():Promise<Array<geolocator.CacheEntry>>;
 
@@ -56,6 +63,10 @@ export function NetConnect(arg1:main.NetConnectRequest):Promise<main.NetSession>
 export function NetSend(arg1:string,arg2:string):Promise<void>;
 
 export function PickWordlist():Promise<string>;
+
+export function QueryCountryBlocks(arg1:main.CountryBlocksRequest):Promise<main.CountryBlocksResult>;
+
+export function ReleaseCountryBlocks():Promise<void>;
 
 export function SaveHistory(arg1:main.HistorySaveRequest):Promise<number>;
 

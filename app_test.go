@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"traceroute/internal/ipblocks"
 	"traceroute/internal/subdomains"
 	"traceroute/internal/webcrawl"
 )
@@ -99,7 +100,7 @@ func TestFormatPortScanReport(t *testing.T) {
 		Concurrency: 64,
 		TimeoutMs:   500,
 		Scanned:     100,
-		Open:        3,
+		Open:        4,
 		Targets:     2,
 		ResolvedTargets: []PortScanTargetInfo{
 			{Label: "web", Host: "10.0.0.1"},
@@ -108,6 +109,7 @@ func TestFormatPortScanReport(t *testing.T) {
 		Rows: []PortScanRow{
 			{Host: "10.0.0.1", Label: "web", Port: 443, Protocol: "tcp", Service: "https", Product: "nginx", TLS: true, Detail: "TLS 1.3"},
 			{Host: "10.0.0.1", Label: "web", Port: 80, Protocol: "tcp", Service: "http", Product: "nginx", Banner: "nginx/1.24\nready"},
+			{Host: "10.0.0.1", Label: "web", Port: 21, Protocol: "tcp", Service: "ftp", Product: "vsFTPd 3.0.3", Banner: "220 (vsFTPd 3.0.3)", FTPAnonymous: boolPtr(true)},
 			{Host: "10.0.0.9", Label: "extra", Port: 22, Protocol: "tcp", Service: "ssh"},
 		},
 	}
@@ -131,6 +133,7 @@ func TestFormatPortScanReport(t *testing.T) {
 		"[TLS]",
 		"detail: TLS 1.3",
 		"banner: nginx/1.24 ready",
+		"anonymous FTP: ANONYMOUS LOGIN ALLOWED",
 		"10.0.0.9",
 	} {
 		if !strings.Contains(out, want) {
@@ -154,5 +157,33 @@ func TestFormatPortScanReportNoRows(t *testing.T) {
 	}
 	if !strings.Contains(out, "Scope:        single host") {
 		t.Errorf("expected single-host scope:\n%s", out)
+	}
+}
+
+// boolPtr returns a pointer to v, for the optional tri-state report fields.
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func TestFormatCountryBlocksReport(t *testing.T) {
+	page := ipblocks.Page{
+		Matched:   2,
+		Addresses: "1.20K",
+		Blocks:    []string{"1.0.0.0/24", "2.0.0.0/16"},
+	}
+	out := formatCountryBlocksReport(CountryBlocksRequest{Country: "us", Family: "ipv4"}, page)
+
+	for _, want := range []string{
+		"COUNTRY IP BLOCKS",
+		"Country:   US",
+		"Family:    IPv4",
+		"Blocks:    2",
+		"Addresses: 1.20K",
+		"1.0.0.0/24",
+		"2.0.0.0/16",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report missing %q:\n%s", want, out)
+		}
 	}
 }

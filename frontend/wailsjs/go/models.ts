@@ -705,8 +705,75 @@ export namespace httpcheck {
 
 }
 
+export namespace ipblocks {
+	
+	export class Country {
+	    code: string;
+	    name: string;
+	    blocks: number;
+	    addresses: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Country(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.code = source["code"];
+	        this.name = source["name"];
+	        this.blocks = source["blocks"];
+	        this.addresses = source["addresses"];
+	    }
+	}
+
+}
+
 export namespace main {
 	
+	export class CountryBlocksRequest {
+	    country: string;
+	    family?: string;
+	    filter?: string;
+	    limit?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CountryBlocksRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.country = source["country"];
+	        this.family = source["family"];
+	        this.filter = source["filter"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class CountryBlocksResult {
+	    country: string;
+	    family?: string;
+	    filter?: string;
+	    total: number;
+	    matched: number;
+	    addresses: string;
+	    blocks: string[];
+	    truncated: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CountryBlocksResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.country = source["country"];
+	        this.family = source["family"];
+	        this.filter = source["filter"];
+	        this.total = source["total"];
+	        this.matched = source["matched"];
+	        this.addresses = source["addresses"];
+	        this.blocks = source["blocks"];
+	        this.truncated = source["truncated"];
+	    }
+	}
 	export class EndpointTarget {
 	    url: string;
 	    label?: string;
@@ -790,6 +857,28 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class IPBlocksInfo {
+	    available: boolean;
+	    path?: string;
+	    database?: string;
+	    build?: string;
+	    ipVersion?: number;
+	    message?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new IPBlocksInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.path = source["path"];
+	        this.database = source["database"];
+	        this.build = source["build"];
+	        this.ipVersion = source["ipVersion"];
+	        this.message = source["message"];
+	    }
+	}
 	export class NetConnectRequest {
 	    host: string;
 	    port: number;
@@ -842,6 +931,7 @@ export namespace main {
 	    detail?: string;
 	    banner?: string;
 	    tls?: boolean;
+	    ftpAnonymous?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new PortScanRow(source);
@@ -858,6 +948,7 @@ export namespace main {
 	        this.detail = source["detail"];
 	        this.banner = source["banner"];
 	        this.tls = source["tls"];
+	        this.ftpAnonymous = source["ftpAnonymous"];
 	    }
 	}
 	export class PortScanTargetInfo {

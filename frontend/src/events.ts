@@ -36,3 +36,5 @@ export const EVENT_HTTP_LOG = 'http:log';
 export const EVENT_HTTP_RESULT = 'http:result';
 
 export const EVENT_BLOCK_LOG = 'block:log';
+
+export const EVENT_IPBLOCKS_PROGRESS = 'ipblocks:progress';

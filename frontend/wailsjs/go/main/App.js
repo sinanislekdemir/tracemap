@@ -54,6 +54,10 @@ export function DeleteHistory(arg1) {
   return window['go']['main']['App']['DeleteHistory'](arg1);
 }
 
+export function ExportCountryBlocks(arg1) {
+  return window['go']['main']['App']['ExportCountryBlocks'](arg1);
+}
+
 export function ExportDomainReport(arg1) {
   return window['go']['main']['App']['ExportDomainReport'](arg1);
 }
@@ -72,6 +76,14 @@ export function ExportPortScanReport(arg1) {
 
 export function GeoCacheInfo() {
   return window['go']['main']['App']['GeoCacheInfo']();
+}
+
+export function IPBlocksInfo() {
+  return window['go']['main']['App']['IPBlocksInfo']();
+}
+
+export function ListCountryBlocks() {
+  return window['go']['main']['App']['ListCountryBlocks']();
 }
 
 export function ListGeoCache() {
@@ -100,6 +112,14 @@ export function NetSend(arg1, arg2) {
 
 export function PickWordlist() {
   return window['go']['main']['App']['PickWordlist']();
+}
+
+export function QueryCountryBlocks(arg1) {
+  return window['go']['main']['App']['QueryCountryBlocks'](arg1);
+}
+
+export function ReleaseCountryBlocks() {
+  return window['go']['main']['App']['ReleaseCountryBlocks']();
 }
 
 export function SaveHistory(arg1) {

@@ -137,7 +137,10 @@ PLAN.md                     design/architecture document
   (cert CN/SAN, issuer, ALPN) on TCP, and by reply shape/banner on UDP
   (DNS/mDNS/NTP labels plus printable banners); on unknown ports TLS is tried
   before HTTP because an HTTP server answers a TLS ClientHello with a misleading
-  plaintext `400`.
+  plaintext `400`. On the FTP port (21, or any port whose greeting looks like an
+  FTP `220`) the probe also attempts an anonymous login (`USER anonymous` /
+  `PASS`) and records the verdict in `Result.FTPAnonymous`; the port-scan report
+  prints `anonymous FTP: ANONYMOUS LOGIN ALLOWED` / `authentication required`.
   Events: `portscan:open`, `portscan:progress`, `portscan:done`,
   `portscan:error`; results are not persisted. `ScanPorts` owns a dedicated
   canceler (`portOps`), so it neither stops nor is stopped by traces/scans;
@@ -251,6 +254,22 @@ PLAN.md                     design/architecture document
   `GeoCacheModal` (Tools ▾ → **GeoIP cache**) lists cached replies newest first
   with a filter, per-entry delete and clear-all, and reports whether persistence
   is disabled (`TRACEROUTE_DB` unset/off).
+- **Country IP blocks** (`internal/ipblocks`): browses the local GeoLite2
+  Country/City database by country. `Open` prefers `GeoLite2-Country.mmdb`, then
+  `GeoLite2-City.mmdb` (`TRACEROUTE_GEOIP_COUNTRY_DB`/`TRACEROUTE_GEOIP_CITY_DB`
+  override, then `TRACEROUTE_GEOIP_DIR`, then the conventional dirs). A full
+  `Reader.Networks` walk (~3.6M networks, ~2.5s) yields the per-country summary
+  (`Countries`, cached once) and a country's prefixes (`Blocks`, one country
+  cached at a time; `ClearCache` frees it). `Paginate` applies the family and
+  CIDR-substring filters and an address-space sum; a negative `Limit` keeps
+  every match for exports. Bound methods: `IPBlocksInfo`, `ListCountryBlocks`,
+  `QueryCountryBlocks`, `ReleaseCountryBlocks`, `ExportCountryBlocks` (plain
+  CIDR lines + summary header). The walk streams `ipblocks:progress`. The
+  frontend `IPBlocksModal` (Tools ▾ → **Country IP blocks**) lists countries
+  with block/address counts, then shows a paged/filtered block list (first 2000
+  lines) and offers **Export blocks**; `ReleaseCountryBlocks` is called on
+  close. Because a country like the US has ~1.45M blocks, the modal never
+  renders the full list on screen.
 - **Shared-hop correlation** is computed in the frontend (`App.tsx`): IPs present
   in 2+ traces become `sharedHops`, highlighted on the map and in the hop list.
 

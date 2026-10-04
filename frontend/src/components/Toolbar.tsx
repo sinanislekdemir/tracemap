@@ -19,6 +19,7 @@ interface ToolbarProps {
   onNet: () => void;
   onConsole: () => void;
   onGeoCache: () => void;
+  onCountryBlocks: () => void;
   onCancel: () => void;
   onHistory: () => void;
   onAddToHistory: () => void;
@@ -41,6 +42,7 @@ const Toolbar = ({
   onNet,
   onConsole,
   onGeoCache,
+  onCountryBlocks,
   onCancel,
   onHistory,
   onAddToHistory,
@@ -204,6 +206,11 @@ const Toolbar = ({
               label: 'GeoIP cache',
               hint: 'cached lookups',
               onSelect: runTool(onGeoCache),
+            },
+            {
+              label: 'Country IP blocks',
+              hint: 'local GeoIP database',
+              onSelect: runTool(onCountryBlocks),
             },
           ]}
           onClose={() => setToolsOpen(false)}

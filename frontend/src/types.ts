@@ -166,6 +166,9 @@ export interface PortResult {
   banner?: string;
   detail?: string;
   tls?: boolean;
+  /** True when an FTP service accepted an anonymous login, false when it
+   * required authentication, undefined when not checked. */
+  ftpAnonymous?: boolean;
 }
 
 /** One host in a multi-target port scan. */
@@ -192,6 +195,7 @@ export interface PortScanRow {
   detail?: string;
   banner?: string;
   tls?: boolean;
+  ftpAnonymous?: boolean;
 }
 
 export interface PortScanProgress {
@@ -340,6 +344,51 @@ export interface GeoCacheInfo {
   enabled: boolean;
   path: string;
   count: number;
+}
+
+/** The local GeoLite2 database backing the country IP block browser. */
+export interface IPBlocksInfo {
+  available: boolean;
+  path?: string;
+  database?: string;
+  build?: string;
+  ipVersion?: number;
+  message?: string;
+}
+
+/** One country's share of the local database. */
+export interface CountryBlockSummary {
+  code: string;
+  name: string;
+  blocks: number;
+  addresses: string;
+}
+
+/** A request for one page of a country's network blocks. */
+export interface CountryBlocksQuery {
+  country: string;
+  family?: string;
+  filter?: string;
+  limit?: number;
+}
+
+/** One page of a country's network blocks. */
+export interface CountryBlocksResult {
+  country: string;
+  family?: string;
+  filter?: string;
+  total: number;
+  matched: number;
+  addresses: string;
+  blocks: string[];
+  truncated: boolean;
+}
+
+/** Progress while the local database is walked. */
+export interface IPBlocksProgressEvent {
+  phase: string;
+  done: number;
+  total: number;
 }
 
 export type CheckStatus = 'pass' | 'warn' | 'fail' | 'info';

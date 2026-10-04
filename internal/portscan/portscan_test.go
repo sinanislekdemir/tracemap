@@ -1,6 +1,7 @@
 package portscan
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"net"
@@ -215,6 +216,95 @@ func TestProbeHTTP(t *testing.T) {
 	}
 	if results[0].TLS {
 		t.Errorf("TLS = true for a plain HTTP server")
+	}
+}
+
+func TestProbeFTPAnonymous(t *testing.T) {
+	tests := []struct {
+		name      string
+		userReply string
+		passReply string
+		want      bool
+	}{
+		{
+			name:      "anonymous allowed",
+			userReply: "331 Please specify the password.\r\n",
+			passReply: "230 Login successful.\r\n",
+			want:      true,
+		},
+		{
+			name:      "anonymous denied",
+			userReply: "530 Login incorrect.\r\n",
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			defer ln.Close()
+			go func() {
+				for {
+					conn, err := ln.Accept()
+					if err != nil {
+						return
+					}
+					go serveFakeFTP(conn, tt.userReply, tt.passReply)
+				}
+			}()
+
+			port := ln.Addr().(*net.TCPAddr).Port
+			results, err := NewScanner().Scan(context.Background(), "127.0.0.1", Options{
+				Ports:   []int{port},
+				Timeout: 700 * time.Millisecond,
+				Probe:   true,
+			}, Observer{})
+			if err != nil {
+				t.Fatalf("Scan error: %v", err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("Scan = %v, want one open port", results)
+			}
+			if results[0].FTPAnonymous == nil {
+				t.Fatalf("FTPAnonymous = nil, want %v", tt.want)
+			}
+			if *results[0].FTPAnonymous != tt.want {
+				t.Fatalf("FTPAnonymous = %v, want %v", *results[0].FTPAnonymous, tt.want)
+			}
+			if results[0].Product == "" {
+				t.Errorf("Product is empty, want the vsFTPd banner to yield a label")
+			}
+		})
+	}
+}
+
+// serveFakeFTP speaks just enough FTP for the anonymous-login probe: it sends a
+// 220 greeting, answers USER with userReply and (when passReply is set) PASS
+// with passReply.
+func serveFakeFTP(conn net.Conn, userReply, passReply string) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	_, _ = conn.Write([]byte("220 (vsFTPd 3.0.3)\r\n"))
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return
+	}
+	if !strings.HasPrefix(strings.ToUpper(line), "USER") {
+		return
+	}
+	_, _ = conn.Write([]byte(userReply))
+	if passReply == "" {
+		return
+	}
+	line, err = reader.ReadString('\n')
+	if err != nil {
+		return
+	}
+	if strings.HasPrefix(strings.ToUpper(line), "PASS") {
+		_, _ = conn.Write([]byte(passReply))
 	}
 }
 

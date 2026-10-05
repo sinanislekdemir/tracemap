@@ -122,7 +122,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.name }}
+          name: tracemap-${{ matrix.name }}
           path: tracemap-*
           if-no-files-found: error
 
@@ -174,7 +174,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: windows-amd64
+          name: tracemap-windows-amd64
           path: tracemap-*
           if-no-files-found: error
 
@@ -193,6 +193,9 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+          # Only our release artifacts; a transient `<owner>~<repo>~*.dockerbuild`
+          # cache artifact from the Windows image build is ignored.
+          pattern: tracemap-*
 
       # Create (or reuse) the release as a draft so users never see a partial
       # release. It is published only after every asset has been uploaded.

@@ -1,36 +1,34 @@
 package main
 
 import (
-	"embed"
+	"context"
+	"log"
+	"os"
+	"runtime"
 
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	qt "github.com/mappu/miqt/qt6"
+
+	"traceroute/internal/mapdata"
 )
 
-//go:embed all:frontend/dist
-var assets embed.FS
-
 func main() {
-	app := NewApp()
+	// Qt requires the GUI to live on the process's main thread.
+	runtime.LockOSThread()
 
-	err := wails.Run(&options.App{
-		Title:     "Traceroute Map",
-		Width:     1280,
-		Height:    860,
-		MinWidth:  900,
-		MinHeight: 600,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
-		Bind: []interface{}{
-			app,
-		},
-	})
+	qt.NewQApplication(os.Args)
+	qt.QGuiApplication_SetApplicationDisplayName("Traceroute Map")
+
+	world, err := mapdata.Load()
 	if err != nil {
-		println("Error:", err.Error())
+		log.Printf("mapdata: %v", err)
+		world = &mapdata.World{}
 	}
+
+	app := NewApp()
+	app.startup(context.Background())
+
+	ui := newUI(app, world)
+	ui.run()
+
+	app.shutdown(context.Background())
 }

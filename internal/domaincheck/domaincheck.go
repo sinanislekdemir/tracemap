@@ -219,15 +219,27 @@ func (a *Analyzer) Analyze(ctx context.Context, domain string, onProgress Progre
 
 	report := Report{Domain: domain, AnalyzedAt: time.Now().UnixMilli()}
 
+	// Registration, DNS and web are independent, so the three run concurrently;
+	// the report is assembled once they all finish.
 	emitProgress(onProgress, "whois", "querying registration data…")
-	registration := a.registration(ctx, domain)
-	report.Registration = &registration
-
 	emitProgress(onProgress, "dns", "resolving DNS records…")
-	report.DNS = a.dnsReport(ctx, domain)
-
 	emitProgress(onProgress, "web", "checking web and TLS…")
-	report.Web = a.webReport(ctx, domain)
+
+	var (
+		wg           sync.WaitGroup
+		registration Registration
+		dnsReport    DNSReport
+		webReport    WebReport
+	)
+	wg.Add(3)
+	go func() { defer wg.Done(); registration = a.registration(ctx, domain) }()
+	go func() { defer wg.Done(); dnsReport = a.dnsReport(ctx, domain) }()
+	go func() { defer wg.Done(); webReport = a.webReport(ctx, domain) }()
+	wg.Wait()
+
+	report.Registration = &registration
+	report.DNS = dnsReport
+	report.Web = webReport
 
 	emitProgress(onProgress, "checks", "building checklist…")
 	report.Checks = buildChecks(&report)

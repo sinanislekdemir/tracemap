@@ -1,27 +1,29 @@
 # AGENTS.md
 
-Traceroute Map — a **Wails v2 desktop app** (Go backend + React/TypeScript
-frontend) that runs traceroutes from the local machine and draws them on a map.
+Traceroute Map — a **native desktop app** (Go backend + Qt6 Widgets UI via
+`miqt`) that runs traceroutes from the local machine and draws them on an
+offline vector map. There is no web engine, tile server or Node build.
 
 ## Commands
 
-Everything goes through the `Makefile`. On Linux the build needs the
-`webkit2_41` tag; the Makefile auto-detects it, so just use `make`.
+Everything goes through the `Makefile`. The map is drawn by our own QPainter
+code, so the only build dependencies are Go, a C++ compiler and the Qt6
+development packages.
 
 ```sh
-make dev          # hot-reload dev app
+make dev          # run the app directly from source
 make build        # release binary -> build/bin/traceroute
 make run          # build then launch
-make check        # go vet + go test + tsc --noEmit  (run before finishing)
+make check        # go vet + go test + go build  (run before finishing)
 make test         # Go tests only
-make typecheck    # frontend type-check only
-make bindings     # regenerate frontend/wailsjs from the Go bound methods
-make sysdeps      # verify Linux build/runtime dependencies
-make clean        # remove build/bin, frontend/dist
+make vet          # go vet only
+make sysdeps      # verify Qt6 build/runtime dependencies
+make clean        # remove build/bin
 ```
 
-System packages (Fedora): `gcc-c++ gtk3-devel webkit2gtk4.1-devel`.
-Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`.
+System packages (Fedora): `qt6-qtbase-devel gcc-c++`.
+System packages (Debian/Ubuntu): `qt6-base-dev g++`.
+Qt Go bindings: `github.com/mappu/miqt` (Qt6 package `.../qt6`).
 
 Always run `make check` after changes. Never commit unless asked.
 
@@ -43,8 +45,21 @@ workflow that packs the `.deb`/`.rpm`/`.tar.gz`.
 ## Layout
 
 ```
-main.go                     Wails entry; embeds frontend/dist; window options
-app.go                      App struct, bound methods (Trace/Scan/ScanPorts/Net*/AnalyzeDomain/ExportDomainReport/Cancel/History/PickWordlist), events
+main.go                     Qt entry: LockOSThread, QApplication, load world, run UI
+app.go                      App struct + backend methods (Trace/Scan/ScanPorts/Net*/AnalyzeDomain/ExportDomainReport/Cancel/History/PickWordlist), event DTOs
+cancel.go                   shared cancellable-operation primitive
+emit.go                     EventSink + Dialogs interfaces (toolkit-agnostic)
+ui_app.go                   uiApp controller: main window, toolbar, sidebar, status bar, event dispatch, map model
+ui_model.go                 UI state types, trace colours, correlation, route/bezier building
+ui_logwindow.go             floating per-channel log windows (console/dns/subdomains/crawl/trace/ports/origin)
+ui_dialogs.go               native Qt Dialogs (QFileDialog/QMessageBox) for the backend
+ui_scan.go                  advanced-scan options window
+ui_port.go                  port-scan window (options + results table + activity)
+ui_tools.go                 domain / unmask / endpoint / GeoIP cache / country-blocks windows
+ui_netcat.go                floating interactive TCP sessions
+ui_helpers.go               CIDR target parsing (mirrors hostscan.ParseCIDR)
+internal/mapdata/           embedded Natural Earth GeoJSON + cities, TopoJSON decode, antimeridian split, Web Mercator
+internal/mapview/           custom QPainter map widget: layers, pan/zoom, hit-testing
 internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP -> geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS lookup -> trace targets
@@ -52,7 +67,7 @@ internal/domaincheck/       domain security report (RDAP/WHOIS, DNS, email auth,
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/webcrawl/          browser-UA HTTP crawl (frontpage + 1 level, robots, sitemap)
 internal/hostscan/          IPv4 CIDR enumeration + live-host discovery (TCP connect)
-internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
+internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing + worker pool
 internal/origin/            keyless origin discovery behind CDNs/proxies ("unmask")
 internal/netcat/            interactive TCP sessions ("nc") for floating windows
 internal/history/           saved traces/scans (SQLite snapshot store)
@@ -61,17 +76,20 @@ internal/netutil/           shared host normalization/resolution/IP/dedup helper
 internal/httputil/          shared browser User-Agent
 internal/sqliteutil/        shared SQLite open/pragmas/schema helper
 internal/ratelimit/         shared context-aware rate limiter
-frontend/src/               React app
-frontend/wailsjs/           generated bindings — do not edit by hand
-build/                      Wails build assets (appicon.png, platform files)
+build/                      appicon.png + Linux desktop file
 .github/workflows/          CI (make check) + tag-triggered release builds
+                            (release.yml pins ubuntu-24.04/macos-14 and guards the
+                            Qt6 baseline — see QT_BASELINE and nfpm.yaml)
 PLAN.md                     design/architecture document
 ```
 
 ## Architecture notes
 
-- **Backend is in-process.** There is no HTTP server or WebSocket. The Go code
-  is bound to the frontend via Wails; progress is streamed as runtime events.
+- **Backend is in-process.** There is no HTTP server or WebSocket. The Qt UI
+  calls the Go methods directly and installs `App.SetEmitter` to receive typed
+  events; backend goroutines marshal onto the Qt GUI thread with
+  `mainthread.Start`. Native file/message dialogs are injected through the
+  `Dialogs` interface so the backend stays toolkit-agnostic.
 - **Every trace event carries a `target` id.** `0` is the single-trace view;
   `Scan` assigns `1..N` to the addresses it traces, so the UI can group and
   colour concurrent traces.
@@ -81,7 +99,13 @@ PLAN.md                     design/architecture document
   bounded by `MaxNSDepth`/`maxNSHosts`), emit `scan:records` then `scan:targets`,
   trace each address with bounded concurrency (`scanConcurrency`), then
   `scan:done`. IPv6 targets are dropped when the host has no global IPv6 address
-  (`filterUnroutable`).
+  (`filterUnroutable`). The DNS work is parallel: `dnscheck.Lookup` runs its
+  A/AAAA, CNAME, MX and NS queries concurrently, `Expand` resolves each
+  nameserver level concurrently (`expandConcurrency`) and `AllTargets` resolves
+  the MX/NS/SOA hosts concurrently (`targetConcurrency`); `App.Scan` also starts
+  `AllTargets` in a goroutine so it overlaps subdomain discovery and the crawl.
+  Results are merged in a stable order, so target ids and record order do not
+  depend on which lookup finishes first.
 - **Traceroute tool discovery** (`internal/tracerouter`): picks the first of
   `traceroute`, `tracepath`, `mtr` (Unix) or `tracert` (Windows) found on `PATH`
   or at conventional absolute paths, then builds tool-specific flags. The parser
@@ -102,7 +126,14 @@ PLAN.md                     design/architecture document
 - **Subdomain discovery** (`internal/subdomains`): local-DNS only. `Discover`
   detects wildcards, brute-forces the embedded 1000+-name `Wordlist`, reverse-
   resolves discovered IPs (optionally sweeping `/24`s), and extracts hosts from
-  SPF/DMARC TXT and SRV records. Bounded concurrency + rate limiter; results are
+  SPF/DMARC TXT and SRV records. Bounded concurrency + rate limiter; the ~30
+  SRV lookups fan out concurrently (`serviceConcurrency`) and their targets are
+  resolved in service order. Brute force and the services pass run concurrently
+  (reverse DNS runs after, since it consumes their IPs), and the collector keeps
+  the most specific source for a name (`sourceRank`: brute > spf > dmarc > srv >
+  ptr) so the result does not depend on phase order. Lookup concurrency and rate
+  are configurable through `ScanOptions.SubdomainConcurrency`/`SubdomainRate`
+  (the scan dialog exposes them as "Parallel / lookups · lookups/s"). Results are
   cached in the `subdomain` table via `Store` (implements `Cache`). The Scan
   dialog (`ScanOptions`) chooses which techniques run; `ScanOptions.WordlistPath`
   points brute force at a user-supplied newline-delimited file via
@@ -121,7 +152,9 @@ PLAN.md                     design/architecture document
   literal), parses `robots.txt` (sitemap directives and Allow/Disallow paths —
   Disallow is ignored, this is a recon tool) and `sitemap.xml` (urlset +
   sitemapindex, gzip-aware, bounded depth), and extracts every in-domain
-  hostname. Bodies are
+  hostname. Sitemaps are fetched a BFS level at a time with each level's fetches
+  run concurrently (`Options.Concurrency`), and the parsed sitemaps are appended
+  in level order so the result is deterministic. Bodies are
   capped (`MaxBodyBytes`) and flagged truncated. When `ScanOptions.Crawl` is set,
   `App.Scan` runs it alongside DNS discovery, streams `scan:crawlPage` per page,
   `scan:crawlLog` for each fetch attempt/outcome (so the UI shows what it tried)
@@ -131,7 +164,12 @@ PLAN.md                     design/architecture document
 - **Port scanning** (`internal/portscan`): pure-Go, no nmap. `App.ScanPorts`
   expands a preset (`top20`/`top100`/`top1000`) or a `ParsePorts` range into a
   port list, then `Scanner.Scan` probes with bounded concurrency, randomised
-  port order and jitter. TCP uses a connect scan; UDP sends a protocol-specific
+  port order and jitter. Probes run on a reusable, fixed-size worker pool
+  (`internal/portscan/pool.go`): `Scanner.Scan` uses a short-lived pool sized to
+  the requested concurrency, while `App.ScanPorts` creates one `portscan.Pool`
+  for the whole operation (`portProbeBudget` = `portScanHostConcurrency` ×
+  per-host concurrency) and shares it across every host, so a CIDR block probe
+  never spawns a goroutine per port. TCP uses a connect scan; UDP sends a protocol-specific
   datagram and reports only replies (best-effort). Optional `Probe` identifies
   the service by banner grab, HTTP `GET`/`Server` header, or TLS handshake
   (cert CN/SAN, issuer, ALPN) on TCP, and by reply shape/banner on UDP
@@ -154,11 +192,11 @@ PLAN.md                     design/architecture document
   frontend assembles a `PortScanReport` (scan options, resolved targets, timing,
   `[]PortScanRow`) for it.
 - **IPv4 CIDR block targets** (`internal/hostscan`): when the toolbar target box
-  holds an IPv4 CIDR (detected by `frontend/src/cidr.ts`, which mirrors
-  `hostscan.ParseCIDR` for the block part and `portscan.ParsePorts` for the port
-  part), the Trace and Scan buttons switch to block mode. The target may carry an
+  holds an IPv4 CIDR (detected by `ui_helpers.go`'s `parseBlockTarget`, which
+  mirrors `hostscan.ParseCIDR` for the block part and `portscan.ParsePorts` for
+  the port part), Trace and Ports switch to block mode. The target may carry an
   optional `:ports` suffix (`10.0.0.0/24:22,80,443-445`, comma-separated ports
-  and ranges); `cidr.ts` strips it, the toolbar shows a `PORTS · N` badge, and
+  and ranges); the parser strips it, the toolbar shows a `PORTS · …` badge, and
   the parsed spec is passed as `TraceBlockRequest.PortRange` /
   `PortScanRequest.PortRange`. Without it, blocks fall back to the top-100 list.
   `App.TraceBlock` (`TraceBlockRequest{cidr,portRange,maxHops}`) enumerates the
@@ -169,14 +207,11 @@ PLAN.md                     design/architecture document
   `traceScan` pipeline (`scan:targets`/`scan:done`). Discovery streams
   `scan:progress` phase `discover` and verbose `block:log` events; it uses the
   shared `App.begin()` canceler, so Cancel stops it. No hard block-size cap:
-  blocks over 65536 addresses log a warning.
-  Scan on a CIDR skips `ScanModal` and opens `PortScanModal` in block mode
-  (`cidr` + `ports` + `autoStart` props): it hides the options screen, uses the
-  explicit ports (or the top-100 preset when none were given) and calls
-  `ScanPorts` with `PortScanRequest.cidr`. The backend's `scanPortBlock`
-  enumerates the block internally and scans all hosts with
+  blocks over 65536 addresses log a warning. Scan/Ports on a CIDR opens
+  `PortScanDialog` in block mode (it sets `PortScanRequest.cidr`): the backend's
+  `scanPortBlock` enumerates the block internally and scans all hosts with
   `portScanHostConcurrency`, reporting host-level (not per-port) progress so the
-  event stream stays bounded; rows carry per-host Trace/Connect/HTTP actions.
+  event stream stays bounded.
 - **Domain analysis** (`internal/domaincheck`): builds a security/reliability
   report for a domain. Registration comes from RDAP via the IANA bootstrap
   (`data.iana.org/rdap/dns.json`, cached in memory), falling back to classic
@@ -187,6 +222,10 @@ PLAN.md                     design/architecture document
   security headers via `httptrace`. `Analyzer.Analyze` runs each phase
   best-effort and returns a `Report` with a pass/warn/fail checklist, a weighted
   score and a letter grade; `domaincheck.FormatReport` renders the export text.
+  The registration, DNS and web phases run concurrently, and `dnsReport` fans
+  out its independent groups (apex records, DMARC, the ~15 DKIM selectors —
+  bounded by `dnsProbeConcurrency` — MTA-STS/TLS-RPT and the raw CAA/DNSKEY/DS
+  queries), folding the results back together in a stable order.
   Bound methods: `AnalyzeDomain` (streams `domain:progress`, own cancellation
   context independent of `App.begin()`) and `ExportDomainReport` (native save
   dialog). The frontend `DomainAnalysisModal` shows the checklist and details and
@@ -206,7 +245,10 @@ PLAN.md                     design/architecture document
   subdomains (  `subdomains.Store.Load`) plus the apex, MX hosts, SPF `ip4:`/`ip6:`
   literals and baseline certificate SANs to build candidates, then connects
   directly to each candidate (SNI/Host pinned to the domain) and compares its
-  TLS cert SHA-256, favicon and body against the proxied baseline. Content is
+  TLS cert SHA-256, favicon and body against the proxied baseline. Candidates
+  are verified concurrently (`Options.Concurrency`), and each candidate's own
+  ports are probed concurrently (`portProbeConcurrency`); the strongest match is
+  then selected in configured port order. Content is
   the decisive signal (a proxy passes body/favicon through unchanged) while the
   baseline certificate is the edge's. An address is confirmed only when it
   serves the target's content directly, is not a current DNS answer for the
@@ -228,7 +270,10 @@ PLAN.md                     design/architecture document
 
   literals and baseline certificate SANs to build candidates, then connects
   directly to each candidate (SNI/Host pinned to the domain) and compares its
-  TLS cert SHA-256, favicon and body against the proxied baseline. Content is
+  TLS cert SHA-256, favicon and body against the proxied baseline. Candidates
+  are verified concurrently (`Options.Concurrency`), and each candidate's own
+  ports are probed concurrently (`portProbeConcurrency`); the strongest match is
+  then selected in configured port order. Content is
   the decisive signal (a proxy passes body/favicon through unchanged) while the
   baseline certificate is the edge's. An address is confirmed only when it
   serves the target's content directly, is not a current DNS answer for the
@@ -276,87 +321,40 @@ PLAN.md                     design/architecture document
   lines) and offers **Export blocks**; `ReleaseCountryBlocks` is called on
   close. Because a country like the US has ~1.45M blocks, the modal never
   renders the full list on screen.
-- **Shared-hop correlation** is computed in the frontend (`App.tsx`): IPs present
+- **Shared-hop correlation** is computed in the UI (`ui_model.go`): IPs present
   in 2+ traces become `sharedHops`, highlighted on the map and in the hop list.
 
-## Frontend conventions
+## UI conventions (Qt6 / miqt)
 
-- **No page scrolling.** The app is a fixed `100vh` grid (app bar → toolbar →
-  sidebar/splitter/map → status bar). Only panes scroll internally.
-- **Floating terminal windows** replace the old bottom dock. `useFloatingWindows`
-  owns position/size/z-order; `FloatingWindow` is the draggable/resizable shell
-  and `TerminalWindow` renders a channel's log lines (`ConsoleBody`). Each scan
-  step opens its own window up front (`handleScanConfirm` opens the enabled
-  `dns`/`subdomains`/`crawl`/`trace` windows before the backend events arrive, so
-  slow discovery does not hide the pending steps), and netcat sessions each get
-  a window. Log lines are stored per channel in
-  `App.tsx` (`logChannels`), capped per channel. Scan windows are closed at the
-  start of a new operation; console/netcat windows persist.
-- **Tool dialogs are floating windows, not blocking modals.** The shared `Modal`
-  shell (used by `ScanModal`, `PortScanModal`, `DomainAnalysisModal`,
-  `OriginModal`, `HistoryModal`) renders with `modal--float`: no backdrop,
-  `position: fixed`, draggable via its header and resizable via the bottom-right
-  `.fw-resize` handle. It portals into the `#window-layer` and draws its
-  z-order from `zorder.ts`, the same counter `useFloatingWindows` uses, so
-  focusing a dialog or a terminal window raises it above the other. The map and
-  terminal windows stay visible and interactive behind it. `PortScanModal` is
-  the port scanner's terminal (inline LIVE LOG); it no longer opens a separate
-  floating `ports` channel window. `MissingToolModal` stays a blocking alert.
-- **react-leaflet gotcha:** `className` must be a **top-level prop** on
-  `CircleMarker`/`Polyline`. Putting it in `pathOptions` routes it through
-  `setStyle()`, which silently drops it. Colours go in `pathOptions`; animations
-  go in `className` + CSS.
-- **The basemap is fully offline** (no tile server, so it works on Windows and
-  without network). Country borders come from Natural Earth 1:110m via
-  `world-atlas` + `topojson-client` in `src/world.ts`, cut at the antimeridian
-  by `src/antimeridian.ts` (Leaflet would otherwise draw Fiji/Russia as a band
-  across the map); major cities come from `src/assets/cities.json`. City names
-  only render at `LABEL_ZOOM`+ to avoid clutter.
-- **Trace colours** come from `src/colors.ts`, assigned by target index.
-- **History view**: `HistoryModal` lists saved entries; loading selection
-  replaces the main map's traces with fresh contiguous ids/colours and sets
-  `viewMode='history'` (exited by running a new trace or the app-bar EXIT).
-- `buildDisplayHops()` (`src/traces.ts`) appends/marks the resolved target IP as
-  the final list entry; `isLocated()` treats `(0, 0)` as "no coordinates".
-- **Tools dropdown**: `Trace` and `Scan` are top-level toolbar buttons; the
-  **Tools ▾** button opens a `ContextMenu`-based dropdown (anchored to the
-  button) holding **Domain analysis**, **Unmask target**, **Port scan**,
-  **Netcat** and **Console**.
-- **Port scan entry points**: the toolbar **Ports** item opens `PortScanModal`
-  for the current target. The right-click context menu (`ContextMenu.tsx`, a
-  generic cursor menu raised by `HopList`, `TraceList` and the map markers)
-  offers **Find open ports** for a specific IP. When more than one resolved scan
-  target exists, the modal offers a **TARGETS** scope toggle — *This host* or
-  *All targets (N)* — and an **Export report** footer button (calls
-  `ExportPortScanReport`) that writes a verbose human-readable `.txt` report
-  (scan context + per-target open ports). The
-  modal goes options → live
-  results, owns its own `portscan:*` subscriptions, and streams open ports into a
-  structured table (grouped per host, with a filter and a port/service sort)
-  while the raw event stream stays in a collapsible **ACTIVITY** pane
-  (`ConsoleBody`, capped at 2000 lines). It cancels through `CancelPortScan`
-  (independent of traces). Do not add a `window` `contextmenu` listener to close
-  the menu — it can fire for the same event that opened it;
-  `pointerdown`/`blur`/`Escape` suffice.
-- **Domain analysis**: `DomainAnalysisModal` runs `AnalyzeDomain`, listens to
-  `domain:progress`, and renders the checklist/details; **Export** calls
-  `ExportDomainReport`. It uses its own cancellation (independent of traces).
-- **Unmask target**: `OriginModal` runs `UnmaskTarget`, listens to
-  `origin:progress`/`origin:log`, and renders the baseline plus candidate
-  verdicts; the verbose log shows in an inline LIVE LOG pane (a fixed-height
-  `ConsoleBody`, ~10 lines) inside the modal and is also mirrored to the
-  `origin` channel. Confirmed/likely origins are passed up to `App.tsx` and
-  drawn on the map as 🏢 markers (`origin-marker` divIcon). Markers clear when a
-  new trace/scan starts. The Tools item is disabled until a scan completes
-  (`scanCompleted`), hinting "scanning must complete to use this tool".
-- After adding or renaming a bound Go method, run `make bindings` or the
-  frontend imports will not compile.
-- **Crash reporting**: `ErrorBoundary` (root, in `main.tsx`) renders
-  `CrashScreen` — the error, its `stack`, the React `componentStack` and the
-  environment, with a Copy button. `GlobalErrorBridge` (inside the boundary)
-  turns uncaught `window` errors and unhandled promise rejections into render
-  errors so they hit the same screen instead of vanishing into the webview
-  console.
+- **The map is hand-painted and offline.** `internal/mapview` draws the embedded
+  Natural Earth geometry (TopoJSON decoded and cut at the antimeridian by
+  `internal/mapdata`) and the trace overlay with `QPainter` in a custom
+  `QWidget`. It owns pan/zoom (wheel = zoom about the cursor, drag = pan) and
+  hit-testing; markers carry the trace/hop metadata. No tile server, web engine
+  or network call is involved. City labels only render above a zoom threshold.
+- **Web-Mercator, our own transform.** `mapdata.Mercator` returns normalized
+  [0,1] coordinates; the widget scales by `TileSize * 2^zoom`. Land/country
+  `QPainterPath`s are built once at startup and reused across zoom and theme.
+- **One main window.** Toolbar row (target box + PORTS badge, Trace/Scan/Ports/
+  Cancel, Tools menu, Correlate, theme toggle) -> `QSplitter` (sidebar tabs:
+  Hops / Traces / Subdomains / Correlation | map) -> `QStatusBar`. Panes scroll
+  internally; the window itself does not.
+- **Floating windows are native decorated tool windows.** Each console/log
+  channel (`dns`, `subdomains`, `crawl`, `trace`, `ports`, `origin`, `console`)
+  is a `QWidget`/`QDialog` with a `QPlainTextEdit`, created lazily via
+  `ensureChannel`. Netcat sessions and every tool dialog (scan, port, domain,
+  unmask, endpoint, GeoIP cache, country blocks) are their own windows.
+- **Typed events, no JSON.** `app.go` emits Go structs through `EventSink`;
+  `ui_app.go`'s `handle` type-switches on them. All UI mutation runs on the Qt
+  GUI thread via `mainthread.Start`.
+- **Trace colours** come from `ui_model.go` (`traceColors`, assigned by target
+  index); `correlationColor` heats up revisited hops.
+- **Shared-hop correlation** is computed in `ui_model.go` (`correlate`): IPs in
+  2+ traces become `sharedHops`, highlighted on the map and in the sidebar.
+- `buildDisplayHops` appends/marks the resolved target IP as the final entry;
+  `isLocated` treats `(0, 0)` as "no coordinates".
+- **CIDR block targets** are detected by `parseBlockTarget` (`ui_helpers.go`),
+  which mirrors `hostscan.ParseCIDR` / `portscan.ParsePorts`.
 
 ## Testing
 
@@ -373,7 +371,10 @@ PLAN.md                     design/architecture document
 - `webcrawl` tests serve fixtures from an `httptest.Server` and dial it with a
   custom transport (plus a fake resolver); no external network.
 - `portscan` tests scan localhost listeners and `httptest` HTTP/TLS servers; no
-  external network. `Scanner.DialContext`/`ResolveIP` can be faked.
+  external network. `Scanner.DialContext`/`ResolveIP` can be faked. The worker
+  pool is tested with a blocking fake dialer: `pool_test.go` asserts the
+  concurrency cap (also across concurrent `Pool.Scan` calls), reuse across
+  sequential scans, and the closed/cancelled paths.
 - Keep tests deterministic and offline.
 
 ## Security

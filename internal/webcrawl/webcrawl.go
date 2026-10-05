@@ -301,41 +301,83 @@ func (c *crawler) crawlSitemaps(ctx context.Context, base *url.URL) {
 	for _, seed := range seeds {
 		queue = append(queue, job{url: seed})
 	}
+	concurrency := c.opts.Concurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
 	seen := make(map[string]bool)
 	count := 0
+
+	// Process the sitemap queue one BFS level at a time, fetching every sitemap
+	// in a level concurrently. Results are folded in level order so the parsed
+	// sitemap list stays deterministic.
 	for len(queue) > 0 && count < maxSitemaps {
-		current := queue[0]
-		queue = queue[1:]
-		if current.url == "" || seen[current.url] || current.depth > maxSitemapDepth {
-			continue
+		level := make([]job, 0, len(queue))
+		for _, current := range queue {
+			if current.url == "" || seen[current.url] || current.depth > maxSitemapDepth {
+				continue
+			}
+			seen[current.url] = true
+			level = append(level, current)
 		}
-		seen[current.url] = true
+		if len(level) == 0 {
+			break
+		}
 
-		c.logf("info", "GET %s", current.url)
-		resp, err := c.fetch(ctx, current.url)
-		if err != nil {
-			c.logf("warn", "  ✗ sitemap: %v", err)
-			continue
+		type outcome struct {
+			url    string
+			status int
+			urls   []string
+			nested []string
+			ok     bool
 		}
-		count++
-		urls, nested := parseSitemap(resp.Body)
-		if len(urls) == 0 && len(nested) == 0 {
-			c.logf("warn", "  → sitemap %d · no entries", resp.Status)
-			continue
+		outcomes := make([]outcome, len(level))
+		sem := make(chan struct{}, concurrency)
+		var wg sync.WaitGroup
+		for i, current := range level {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int, current job) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				c.logf("info", "GET %s", current.url)
+				resp, err := c.fetch(ctx, current.url)
+				if err != nil {
+					c.logf("warn", "  ✗ sitemap: %v", err)
+					return
+				}
+				urls, nested := parseSitemap(resp.Body)
+				outcomes[i] = outcome{url: resp.URL, status: resp.Status, urls: urls, nested: nested, ok: true}
+			}(i, current)
 		}
-		c.logf("ok", "  → sitemap %d · %d urls · %d nested", resp.Status, len(urls), len(nested))
-		c.mu.Lock()
-		c.sitemaps = append(c.sitemaps, Sitemap{
-			URL: resp.URL, Status: resp.Status, URLs: urls, Nested: nested,
-		})
-		c.mu.Unlock()
+		wg.Wait()
 
-		for _, u := range urls {
-			c.addURL(u)
+		var next []job
+		for i, current := range level {
+			o := outcomes[i]
+			if !o.ok {
+				continue
+			}
+			count++
+			if len(o.urls) == 0 && len(o.nested) == 0 {
+				c.logf("warn", "  → sitemap %d · no entries", o.status)
+				continue
+			}
+			c.logf("ok", "  → sitemap %d · %d urls · %d nested", o.status, len(o.urls), len(o.nested))
+			c.mu.Lock()
+			c.sitemaps = append(c.sitemaps, Sitemap{
+				URL: o.url, Status: o.status, URLs: o.urls, Nested: o.nested,
+			})
+			c.mu.Unlock()
+
+			for _, u := range o.urls {
+				c.addURL(u)
+			}
+			for _, n := range o.nested {
+				next = append(next, job{url: n, depth: current.depth + 1})
+			}
 		}
-		for _, n := range nested {
-			queue = append(queue, job{url: n, depth: current.depth + 1})
-		}
+		queue = next
 	}
 }
 

@@ -1,7 +1,5 @@
 build/bin
-node_modules
-frontend/dist
-frontend/package.json.md5
+/traceroute
 geo-cache.db
 history.db
 tracemap.db

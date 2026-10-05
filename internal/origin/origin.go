@@ -141,9 +141,13 @@ var defaultPorts = []int{443, 80, 8443, 8080, 2083, 2087, 2096, 2082}
 
 const (
 	defaultConcurrency = 16
-	defaultTimeout     = 8 * time.Second
-	maxBodyBytes       = 1 << 20
-	maxFaviconBytes    = 256 << 10
+	// portProbeConcurrency bounds the ports probed in parallel on one candidate.
+	// Candidates are already probed concurrently, so this deliberately stays
+	// modest to keep the total number of in-flight TLS handshakes reasonable.
+	portProbeConcurrency = 4
+	defaultTimeout       = 8 * time.Second
+	maxBodyBytes         = 1 << 20
+	maxFaviconBytes      = 256 << 10
 )
 
 // Discover mines candidate addresses from the domain's DNS footprint and
@@ -277,31 +281,56 @@ func verifyOne(ctx context.Context, domain string, base Baseline, candidate Cand
 	}
 
 	logMessage(opts, "info", "probing %s on %v", candidate.IP, opts.Ports)
+
+	// Probe every port concurrently, then select the strongest match in the
+	// configured port order so the result is deterministic.
+	type portResult struct {
+		port     int
+		endpoint endpointResult
+		evidence Evidence
+	}
+	results := make([]portResult, len(opts.Ports))
+	sem := make(chan struct{}, portProbeConcurrency)
+	var wg sync.WaitGroup
+	for i, port := range opts.Ports {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i, port int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			endpoint := probeEndpoint(ctx, domain, candidate.IP, port, opts)
+			if !endpoint.Responded {
+				return
+			}
+			evidence := compare(base, endpoint, opts.Rules)
+			evidence.FanIn = len(candidate.Hostnames)
+			results[i] = portResult{port: port, endpoint: endpoint, evidence: evidence}
+		}(i, port)
+	}
+	wg.Wait()
+
 	var (
 		best         endpointResult
 		bestEvidence Evidence
 		bestScore    = -1
 		ports        []int
 	)
-	for _, port := range opts.Ports {
-		if ctx.Err() != nil {
-			break
-		}
-		endpoint := probeEndpoint(ctx, domain, candidate.IP, port, opts)
-		if !endpoint.Responded {
+	for _, r := range results {
+		if !r.endpoint.Responded {
 			continue
 		}
-		logMessage(opts, "info", "%s:%d responded · HTTP %d · tls=%t", candidate.IP, port, endpoint.Status, endpoint.HTTPS)
-		evidence := compare(base, endpoint, opts.Rules)
-		evidence.FanIn = len(candidate.Hostnames)
+		logMessage(opts, "info", "%s:%d responded · HTTP %d · tls=%t", candidate.IP, r.port, r.endpoint.Status, r.endpoint.HTTPS)
 		switch {
-		case score(evidence) > bestScore:
-			bestScore = score(evidence)
-			best = endpoint
-			bestEvidence = evidence
-			ports = []int{port}
-		case score(evidence) == bestScore && bestScore >= 0:
-			ports = append(ports, port)
+		case score(r.evidence) > bestScore:
+			bestScore = score(r.evidence)
+			best = r.endpoint
+			bestEvidence = r.evidence
+			ports = []int{r.port}
+		case score(r.evidence) == bestScore && bestScore >= 0:
+			ports = append(ports, r.port)
 		}
 	}
 

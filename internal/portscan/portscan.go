@@ -10,11 +10,8 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -82,20 +79,54 @@ func NewScanner() *Scanner {
 // Scan probes opts.Ports on host and returns the open ones, sorted by port. A
 // cancelled context stops the scan and returns the results gathered so far
 // together with the context error.
+//
+// Scan runs the probes on a short-lived worker pool sized to the requested
+// concurrency. To reuse one set of workers across many hosts (for example every
+// host in a CIDR block), create a Pool and call Pool.Scan instead.
 func (s *Scanner) Scan(ctx context.Context, host string, opts Options, obs Observer) ([]Result, error) {
+	plan, err := s.plan(ctx, host, opts)
+	if err != nil {
+		return nil, err
+	}
+	workers := opts.Concurrency
+	if workers <= 0 {
+		workers = DefaultConcurrency
+	}
+	if workers > len(plan.ports) {
+		workers = len(plan.ports)
+	}
+	pool := NewPool(s, workers)
+	defer pool.Close()
+	return pool.run(ctx, plan, obs)
+}
+
+// scanPlan is a validated, ready-to-run scan of one host.
+type scanPlan struct {
+	ip       string
+	host     string
+	protocol string
+	ports    []int
+	timeout  time.Duration
+	jitter   time.Duration
+	probe    bool
+}
+
+// plan validates a scan request, resolves the host and shuffles the ports,
+// returning a plan that a worker pool can execute.
+func (s *Scanner) plan(ctx context.Context, host string, opts Options) (scanPlan, error) {
 	host = strings.TrimSpace(host)
 	if host == "" {
-		return nil, errors.New("host is required")
+		return scanPlan{}, errors.New("host is required")
 	}
 
 	protocol := normalizeProtocol(opts.Protocol)
 	if protocol == "" {
-		return nil, fmt.Errorf("unsupported protocol %q", opts.Protocol)
+		return scanPlan{}, fmt.Errorf("unsupported protocol %q", opts.Protocol)
 	}
 
 	ports := dedupePorts(opts.Ports)
 	if len(ports) == 0 {
-		return nil, errors.New("no ports to scan")
+		return scanPlan{}, errors.New("no ports to scan")
 	}
 	if len(ports) > MaxPorts {
 		ports = ports[:MaxPorts]
@@ -103,16 +134,9 @@ func (s *Scanner) Scan(ctx context.Context, host string, opts Options, obs Obser
 
 	ip, err := s.resolve(ctx, host)
 	if err != nil {
-		return nil, err
+		return scanPlan{}, err
 	}
 
-	concurrency := opts.Concurrency
-	if concurrency <= 0 {
-		concurrency = DefaultConcurrency
-	}
-	if concurrency > len(ports) {
-		concurrency = len(ports)
-	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
@@ -120,65 +144,16 @@ func (s *Scanner) Scan(ctx context.Context, host string, opts Options, obs Obser
 
 	shuffled := clonePorts(ports)
 	rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
-	total := len(shuffled)
 
-	var (
-		mu      sync.Mutex
-		results []Result
-		open    int64
-		done    int64
-	)
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-
-scanLoop:
-	for _, port := range shuffled {
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			break scanLoop
-		}
-		wg.Add(1)
-		go func(port int) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			if ctx.Err() != nil {
-				return
-			}
-			if opts.Jitter > 0 && !sleepJitter(ctx, opts.Jitter) {
-				return
-			}
-
-			result, found := s.scanPort(ctx, ip, host, port, protocol, timeout, opts.Probe)
-			if found {
-				atomic.AddInt64(&open, 1)
-				mu.Lock()
-				results = append(results, result)
-				mu.Unlock()
-				if obs.OnOpen != nil {
-					obs.OnOpen(result)
-				}
-			}
-
-			n := atomic.AddInt64(&done, 1)
-			if obs.OnProgress != nil && (n%progressEvery == 0 || int(n) == total) {
-				obs.OnProgress(int(n), total, int(atomic.LoadInt64(&open)))
-			}
-		}(port)
-	}
-	wg.Wait()
-
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].Port != results[j].Port {
-			return results[i].Port < results[j].Port
-		}
-		return results[i].Protocol < results[j].Protocol
-	})
-	if err := ctx.Err(); err != nil {
-		return results, err
-	}
-	return results, nil
+	return scanPlan{
+		ip:       ip,
+		host:     host,
+		protocol: protocol,
+		ports:    shuffled,
+		timeout:  timeout,
+		jitter:   opts.Jitter,
+		probe:    opts.Probe,
+	}, nil
 }
 
 // scanPort probes one port and returns the result plus whether it is open.

@@ -1,21 +1,15 @@
-# Traceroute Map — desktop app (Wails v2)
+# Traceroute Map — native desktop app (Go + Qt6 via miqt)
 #
-# Linux/WebKitGTK 4.1 note: this box has only webkit2gtk-4.1, so builds need the
-# `webkit2_41` tag. It is auto-detected below and can be overridden with
-# `make build WAILS_TAGS=`.
+# The UI is Qt6 Widgets. It renders the offline vector map itself with QPainter
+# (see internal/mapview), so there is no web engine, tile server or Node build.
+# You need the Qt6 development packages; `make sysdeps` checks for them.
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-APP    := traceroute
-BIN    := build/bin/$(APP)
-GO     := go
-NPM    := npm
-WAILS  ?= $(shell command -v wails 2>/dev/null || echo $(HOME)/go/bin/wails)
-
-# Auto-detect the WebKitGTK flavour for the build tag.
-WAILS_TAGS ?= $(if $(shell pkg-config --exists webkit2gtk-4.1 2>/dev/null && echo 1),webkit2_41,)
-TAG_FLAG   := $(if $(WAILS_TAGS),-tags $(WAILS_TAGS),)
+APP := traceroute
+BIN := build/bin/$(APP)
+GO  := go
 
 ## help: show this help
 .PHONY: help
@@ -24,65 +18,53 @@ help:
 	@echo
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /' | column -t -s ':'
 	@echo
-	@echo "  WAILS_TAGS = $(if $(WAILS_TAGS),$(WAILS_TAGS),(none))   WAILS = $(WAILS)"
+	@echo "  Qt: $$(pkg-config --modversion Qt6Widgets 2>/dev/null || echo 'not found')"
 
-## sysdeps: verify Linux build/runtime dependencies
+## sysdeps: verify Qt6 build dependencies
 .PHONY: sysdeps
 sysdeps:
 	@missing=0; \
-	for p in webkit2gtk-4.1 gtk+-3.0; do \
-	  if pkg-config --exists $$p 2>/dev/null; then echo "  ok   $$p"; else echo "  MISS $$p"; missing=1; fi; \
-	done; \
+	if pkg-config --exists Qt6Widgets 2>/dev/null; then echo "  ok   Qt6Widgets $$(pkg-config --modversion Qt6Widgets)"; else echo "  MISS Qt6Widgets"; missing=1; fi; \
 	if command -v g++ >/dev/null 2>&1; then echo "  ok   g++"; else echo "  MISS g++"; missing=1; fi; \
+	if [ "$$(go env CGO_ENABLED)" = "1" ]; then echo "  ok   cgo"; else echo "  MISS cgo (CGO_ENABLED=0)"; missing=1; fi; \
 	if [ $$missing -ne 0 ]; then \
-	  echo; echo "Install with:"; \
-	  echo "  sudo dnf install -y gcc-c++ gtk3-devel webkit2gtk4.1-devel"; \
+	  echo; echo "Install Qt6 development packages:"; \
+	  echo "  Fedora:  sudo dnf install -y qt6-qtbase-devel gcc-c++"; \
+	  echo "  Debian:  sudo apt-get install -y qt6-base-dev g++"; \
+	  echo "  macOS:   brew install qt"; \
 	  exit 1; \
 	fi
 
-## check-wails: verify the Wails CLI is installed
-.PHONY: check-wails
-check-wails:
-	@command -v $(WAILS) >/dev/null 2>&1 || { \
-	  echo "wails CLI not found at '$(WAILS)'."; \
-	  echo "Install: go install github.com/wailsapp/wails/v2/cmd/wails@latest"; \
-	  exit 1; }
-
-## deps: download Go modules and install frontend packages
+## deps: download Go modules
 .PHONY: deps
 deps:
 	$(GO) mod download
-	$(NPM) --prefix frontend install
 
-## bindings: regenerate the JS/TS bindings from the Go backend
-.PHONY: bindings
-bindings: check-wails
-	$(WAILS) generate module
-
-## dev: run the app with hot reload
-.PHONY: dev
-dev: check-wails
-	$(WAILS) dev $(TAG_FLAG)
-
-## build: produce the release binary in build/bin/
+## build: compile the release binary into build/bin/
 .PHONY: build
-build: check-wails
-	$(WAILS) build $(TAG_FLAG)
+build:
+	@mkdir -p build/bin
+	$(GO) build -trimpath -ldflags "-s -w" -o $(BIN) .
 
 ## run: build, then launch the app
 .PHONY: run
 run: build
 	$(BIN)
 
+## dev: run the app directly from source
+.PHONY: dev
+dev:
+	$(GO) run .
+
 ## test: run Go tests
 .PHONY: test
 test:
-	$(GO) test $(TAG_FLAG) ./...
+	$(GO) test ./...
 
 ## vet: run go vet
 .PHONY: vet
 vet:
-	$(GO) vet $(TAG_FLAG) ./...
+	$(GO) vet ./...
 
 ## fmt: format Go sources
 .PHONY: fmt
@@ -94,21 +76,11 @@ fmt:
 tidy:
 	$(GO) mod tidy
 
-## typecheck: type-check the frontend
-.PHONY: typecheck
-typecheck:
-	$(NPM) --prefix frontend run typecheck
-
-## check: vet + test + typecheck
+## check: vet + test + build
 .PHONY: check
-check: vet test typecheck
+check: vet test build
 
-## clean: remove build artifacts and the built frontend
+## clean: remove build artifacts
 .PHONY: clean
 clean:
-	rm -rf build/bin frontend/dist frontend/package.json.md5
-
-## distclean: clean plus frontend node_modules
-.PHONY: distclean
-distclean: clean
-	rm -rf frontend/node_modules
+	rm -rf build/bin

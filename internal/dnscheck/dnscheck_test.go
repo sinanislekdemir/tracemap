@@ -3,10 +3,102 @@ package dnscheck
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
+
+// concurrentResolver records the highest number of lookups in flight at once,
+// so tests can prove that a fan-out is actually concurrent.
+type concurrentResolver struct {
+	fakeResolver
+	hold time.Duration
+
+	mu  sync.Mutex
+	cur int
+	max int
+}
+
+func (r *concurrentResolver) begin() {
+	r.mu.Lock()
+	r.cur++
+	if r.cur > r.max {
+		r.max = r.cur
+	}
+	r.mu.Unlock()
+	time.Sleep(r.hold)
+}
+
+func (r *concurrentResolver) end() {
+	r.mu.Lock()
+	r.cur--
+	r.mu.Unlock()
+}
+
+func (r *concurrentResolver) maxSeen() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.max
+}
+
+func (r *concurrentResolver) LookupIP(ctx context.Context, _, host string) ([]net.IP, error) {
+	r.begin()
+	defer r.end()
+	return r.fakeResolver.LookupIP(ctx, "ip", host)
+}
+
+func (r *concurrentResolver) LookupCNAME(ctx context.Context, host string) (string, error) {
+	r.begin()
+	defer r.end()
+	return r.fakeResolver.LookupCNAME(ctx, host)
+}
+
+func (r *concurrentResolver) LookupMX(ctx context.Context, host string) ([]*net.MX, error) {
+	r.begin()
+	defer r.end()
+	return r.fakeResolver.LookupMX(ctx, host)
+}
+
+func (r *concurrentResolver) LookupNS(ctx context.Context, host string) ([]*net.NS, error) {
+	r.begin()
+	defer r.end()
+	return r.fakeResolver.LookupNS(ctx, host)
+}
+
+func TestLookupRunsConcurrently(t *testing.T) {
+	resolver := &concurrentResolver{hold: 20 * time.Millisecond}
+	Lookup(context.Background(), resolver, "example.com")
+	if got := resolver.maxSeen(); got < 2 {
+		t.Fatalf("lookups were serialised (max concurrency %d), want concurrent", got)
+	}
+}
+
+func TestAllTargetsRunsConcurrently(t *testing.T) {
+	resolver := &concurrentResolver{
+		hold: 20 * time.Millisecond,
+		fakeResolver: fakeResolver{
+			ips: map[string][]net.IP{
+				"mail1.example.com": {net.ParseIP("2.2.2.2")},
+				"mail2.example.com": {net.ParseIP("3.3.3.3")},
+				"ns1.example.com":   {net.ParseIP("4.4.4.4")},
+			},
+		},
+	}
+	records := []Record{
+		{Type: "MX", Value: "mail1.example.com"},
+		{Type: "MX", Value: "mail2.example.com"},
+		{Type: "NS", Value: "ns1.example.com"},
+	}
+	targets := AllTargets(context.Background(), resolver, "example.com", records)
+	if len(targets) != 3 {
+		t.Fatalf("got %d targets, want 3: %+v", len(targets), targets)
+	}
+	if got := resolver.maxSeen(); got < 2 {
+		t.Fatalf("host resolutions were serialised (max concurrency %d), want concurrent", got)
+	}
+}
 
 type fakeResolver struct {
 	ips    map[string][]net.IP

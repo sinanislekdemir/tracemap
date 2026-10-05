@@ -88,6 +88,8 @@ const (
 	defaultMaxPTRNetblocks = 4
 	maxPTRHostsPerNetblock = 254
 	progressEvery          = 25
+	// serviceConcurrency bounds the concurrent SRV lookups in the services phase.
+	serviceConcurrency = 12
 )
 
 // Discover finds subdomains of domain. When cache is non-nil, cached results
@@ -113,12 +115,26 @@ func Discover(ctx context.Context, resolver Resolver, domain string, opts Option
 
 	wildcard := detectWildcard(ctx, resolver, domain, opts)
 
+	// Brute force and the services pass are independent name-discovery phases,
+	// so they run concurrently. Reverse DNS runs afterwards because it consumes
+	// the IPs those phases found.
+	var discovery sync.WaitGroup
 	if opts.BruteForce {
-		bruteForce(ctx, resolver, domain, opts, wildcard, collector)
+		discovery.Add(1)
+		go func() {
+			defer discovery.Done()
+			bruteForce(ctx, resolver, domain, opts, wildcard, collector)
+		}()
 	}
 	if opts.Services {
-		discoverServices(ctx, resolver, domain, collector)
+		discovery.Add(1)
+		go func() {
+			defer discovery.Done()
+			discoverServices(ctx, resolver, domain, collector)
+		}()
 	}
+	discovery.Wait()
+
 	if opts.PTR {
 		reverseLookup(ctx, resolver, domain, collector, seedIPs, opts)
 	}
@@ -176,6 +192,11 @@ func (c *collector) add(name, source string, ips []string) {
 	defer c.mu.Unlock()
 	if existing, ok := c.byName[name]; ok {
 		existing.IPs = netutil.MergeUnique(existing.IPs, ips)
+		// Keep the most specific source, so running the discovery phases
+		// concurrently does not change which source a name is attributed to.
+		if sourceRank(source) > sourceRank(existing.Source) {
+			existing.Source = source
+		}
 		return
 	}
 	if len(c.order) >= c.max {
@@ -184,6 +205,25 @@ func (c *collector) add(name, source string, ips []string) {
 	result := &Result{Name: name, Source: source, IPs: netutil.MergeUnique(nil, ips)}
 	c.byName[name] = result
 	c.order = append(c.order, name)
+}
+
+// sourceRank orders discovery sources from most to least specific, so a name
+// found by several phases keeps a stable source regardless of phase order.
+func sourceRank(source string) int {
+	switch source {
+	case "brute":
+		return 5
+	case "spf":
+		return 4
+	case "dmarc":
+		return 3
+	case "srv":
+		return 2
+	case "ptr":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (c *collector) ips() []string {
@@ -268,7 +308,9 @@ func bruteForce(ctx context.Context, resolver Resolver, domain string, opts Opti
 }
 
 // discoverServices extracts hostnames from SPF/DMARC TXT records and common SRV
-// records.
+// records. The SRV lookups (about thirty, one per service) are independent and
+// run concurrently; their targets are then resolved in service order so the
+// collector's insertion order stays deterministic.
 func discoverServices(ctx context.Context, resolver Resolver, domain string, c *collector) {
 	if txts, err := resolver.LookupTXT(ctx, domain); err == nil {
 		for _, host := range parseSPFHosts(txts) {
@@ -280,13 +322,32 @@ func discoverServices(ctx context.Context, resolver Resolver, domain string, c *
 			addResolved(ctx, resolver, domain, "dmarc", host, c)
 		}
 	}
-	for _, service := range srvServices {
-		_, records, err := resolver.LookupSRV(ctx, service.service, service.proto, domain)
-		if err != nil {
-			continue
-		}
-		for _, record := range records {
-			addResolved(ctx, resolver, domain, "srv", record.Target, c)
+
+	srvTargets := make([][]string, len(srvServices))
+	sem := make(chan struct{}, serviceConcurrency)
+	var wg sync.WaitGroup
+	for i, service := range srvServices {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, service srvService) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			_, records, err := resolver.LookupSRV(ctx, service.service, service.proto, domain)
+			if err != nil {
+				return
+			}
+			targets := make([]string, 0, len(records))
+			for _, record := range records {
+				targets = append(targets, record.Target)
+			}
+			srvTargets[i] = targets
+		}(i, service)
+	}
+	wg.Wait()
+
+	for _, targets := range srvTargets {
+		for _, target := range targets {
+			addResolved(ctx, resolver, domain, "srv", target, c)
 		}
 	}
 }

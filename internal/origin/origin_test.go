@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -327,6 +328,63 @@ func TestNormalizeDomain(t *testing.T) {
 		if got := netutil.NormalizeDomain(input); got != want {
 			t.Fatalf("NormalizeDomain(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+// countingDialer records the highest number of concurrent dials, so a test can
+// prove that a candidate's ports are probed in parallel.
+type countingDialer struct {
+	addr string
+	hold time.Duration
+
+	mu  sync.Mutex
+	cur int
+	max int
+}
+
+func (d *countingDialer) dial(ctx context.Context, network, _ string) (net.Conn, error) {
+	d.mu.Lock()
+	d.cur++
+	if d.cur > d.max {
+		d.max = d.cur
+	}
+	d.mu.Unlock()
+
+	time.Sleep(d.hold)
+
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, network, d.addr)
+
+	d.mu.Lock()
+	d.cur--
+	d.mu.Unlock()
+	return conn, err
+}
+
+func (d *countingDialer) maxSeen() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.max
+}
+
+func TestVerifyOneProbesPortsConcurrently(t *testing.T) {
+	server := httptest.NewTLSServer(testHandler(nil))
+	defer server.Close()
+
+	dialer := &countingDialer{addr: server.Listener.Addr().String(), hold: 30 * time.Millisecond}
+	opts := Options{
+		Ports:      []int{443, 8443, 4443, 2083},
+		Timeout:    3 * time.Second,
+		Resolver:   fakeResolver{ips: map[string][]string{"example.com": {"127.0.0.1"}}},
+		Dial:       dialer.dial,
+		HTTPClient: baselineClient(server, "example.com"),
+		Rules:      DefaultRules(),
+	}
+	base := Baseline{Proxied: true, ProxiedIPs: []string{"10.0.0.1"}}
+
+	verifyOne(context.Background(), "example.com", base, Candidate{IP: "10.0.0.9"}, opts)
+	if got := dialer.maxSeen(); got < 2 {
+		t.Fatalf("ports were probed serially (max concurrent dials %d), want parallel", got)
 	}
 }
 

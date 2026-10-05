@@ -11,8 +11,9 @@ selection back onto the map to compare routes and spot shared hops, grade a
 domain's security and reliability with a WHOIS/RDAP, DNS, email-auth and TLS
 report, and hunt for the true origin address behind a CDN or reverse proxy.
 
-Built with [Wails v2](https://wails.io) — a Go backend bound directly to a
-React + TypeScript frontend, packaged as a single native binary.
+Built with **Qt6 Widgets** (via [`mappu/miqt`](https://github.com/mappu/miqt)) —
+a Go backend and a native UI in one binary, with the map drawn directly by our
+own QPainter code (no web engine, no tile server).
 
 ## Screenshots
 I keep changing the UI, therefore I can't put screenshots for every feature.
@@ -53,12 +54,16 @@ highlighted as correlation points.*
 - **Port scanning** — right-click a target or hop and choose **Find open ports**.
   The pure-Go scanner (no nmap) does a TCP connect scan or best-effort UDP
   probe over common-port presets or a custom range, with randomised port order
-  and jitter to reduce the scan signature. Open ports are optionally identified
+  and jitter to reduce the scan signature. Probes run on a fixed-size worker
+  pool that is shared across every host in a multi-target or CIDR-block scan,
+  so a large block never spawns a goroutine per port. Open ports are optionally identified
   by banner grab, HTTP request and TLS handshake on TCP (server, certificate and
   ALPN), and by reply shape or printable banner on UDP (DNS, mDNS and NTP are
-  labelled). Open ports stream into a filterable, sortable table grouped per
-  host, and **Export report** writes a verbose text report of the scan context
-  and every open port.
+  labelled); an FTP service is also checked for an anonymous login. Open ports
+  stream into a results table, and **Export report** writes a verbose text report
+  of the scan context and every open port. The window can scan either the current
+  host or **All targets** from the last scan, a whole IPv4 CIDR block, with
+  adjustable concurrency and per-port timeout.
 - **Domain analysis** — the **Tools ▾ → Domain analysis** report grades a domain
   on security and reliability. Registration data comes from RDAP via the IANA
   bootstrap, falling back to classic WHOIS (asking IANA for the registry server).
@@ -81,17 +86,25 @@ highlighted as correlation points.*
   the built-in rules to `unmask-rules.json` and the tool can load them. Verbose
   progress streams into a LIVE LOG pane in the dialog.
 - **Interactive TCP sessions** — open a netcat-style session to a host and port
-  from **Tools ▾ → Netcat** or the right-click **Connect (nc)** action. A
-  line-oriented terminal in its own floating window sends what you type
-  (LF/CRLF/none) and streams the peer's raw output back; optional TLS for
-  encrypted services. TCP only.
+  from **Tools ▾ → Netcat** or the port-scan row menu. A line-oriented terminal
+  in its own floating window sends what you type and streams the peer's raw
+  output back; optional TLS (with an SNI-name override), a connect timeout, a
+  **Disconnect** button and a protocol cheatsheet. Closing the window ends the
+  session. TCP only.
 - **Geolocation** — every responsive hop is resolved to coordinates, city,
   country and ASN/ISP, with a persistent cache so repeat hops are instant. The
   coordinates are shown in the hop list and map popup, with an **Open in
   OpenStreetMap** link that opens the location in your default browser.
 - **Offline world map** — the basemap is bundled Natural Earth vector data
   (1:110m country borders plus 243 major cities), so it needs no network and no
-  tile server and works on every platform.
+  tile server and works on every platform. A TRACES legend overlay keys each
+  trace's colour, a scale bar shows the current zoom's ground distance, and a
+  HUD reports located/shared totals.
+- **Trace visibility & status** — tick the checkbox on a trace in the TARGETS
+  list to show or hide it on the map, and right-click a trace or hop for
+  **Find open ports** / **Trace this host**. **Motion** (on by default) animates
+  a travelling marker along each route. The status bar shows a live elapsed timer
+  while an operation runs plus located/shared/hidden counts.
 - **History** — explicitly save completed traces and scans to a local SQLite
   database, then browse, replay, delete or clear them.
 - **Comparison & correlation** — load a selection of saved traces onto one map;
@@ -103,8 +116,10 @@ highlighted as correlation points.*
   trace, ports) opens its own draggable, resizable terminal window and streams
   verbose logs as it runs, so you can see exactly what each stage tried. Netcat
   sessions get their own windows too, and a general **Console** window shows
-  overall activity. Move, resize or close them freely; scan windows reset at the
-  start of each operation.
+  overall activity. Every child window (log terminals, tool dialogs, netcat
+  sessions) is flagged always-on-top, so the main window never covers them.
+  Move, resize or close them freely; scan windows reset at the start of each
+  operation.
 - **Missing-dependency guidance** — if no `traceroute`/`tracepath`/`mtr` (Unix)
   or `tracert` (Windows) is installed, the app shows a modal with the install
   command for your platform instead of a bare error.
@@ -119,29 +134,35 @@ Prebuilt binaries are attached to each tagged release:
 | OS | Architecture | Artifact |
 | --- | --- | --- |
 | Linux | x86_64 | `tracemap-<version>-linux-amd64.tar.gz`, `.deb`, `.rpm` |
-| macOS | Universal (Intel + Apple Silicon) | `tracemap-<version>-darwin-universal.zip` |
-| Windows | x86_64 | `tracemap-<version>-windows-amd64.zip` |
+| macOS | Apple Silicon (arm64) | `tracemap-<version>-darwin-arm64.zip` |
+
+> Windows packaging is not part of the current build; the Go backend already
+> handles Windows paths, so it can be added as a follow-up.
 
 The `.deb` and `.rpm` packages install the binary as `tracemap` (to `/usr/bin`),
 a desktop entry and an icon.
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds each
-target on its native runner and publishes a GitHub release. Wails apps cannot
-be cross-compiled, so every platform is built on its own runner. CI
-(`.github/workflows/ci.yml`) runs `make check` on every push and pull request.
+target on its native runner and publishes a GitHub release. Qt/cgo applications
+cannot be trivially cross-compiled, so every platform is built on its own runner.
+CI (`.github/workflows/ci.yml`) runs `make check` on every push and pull request.
 
 ## How it works
 
-Raw ICMP sockets are not available to the webview, and the point is to measure
+Raw ICMP sockets are not available to a sandboxed UI, and the point is to measure
 **your** network path, so the Go backend runs the system `traceroute`/`tracert`
 binary locally and streams parsed hops to the UI. There is no HTTP server or
-WebSocket: the backend is linked into the app and exposed to the frontend
-through Wails bindings and runtime events.
+WebSocket: the backend is linked into the app. The Qt UI calls the Go methods
+directly and installs an `EventSink` to receive typed events.
 
 ```
-Wails window (React + Leaflet map UI)
-   │  Bind: Trace, Scan, ScanPorts, NetConnect, NetSend, NetClose, AnalyzeDomain, ExportDomainReport, UnmaskTarget, UnmaskRulesPath, CreateUnmaskRules, ExportOriginReport, CheckTools, …
-   │  Events: trace:hop, trace:geo, trace:done, scan:targets, scan:crawlPage, scan:crawlLog, portscan:open, net:data, domain:progress, origin:progress, origin:log, …
+Qt6 window (native widgets + hand-painted offline vector map)
+   │  Call: Trace, Scan, ScanPorts, NetConnect, NetSend, NetClose, AnalyzeDomain,
+   │        ExportDomainReport, UnmaskTarget, UnmaskRulesPath, CreateUnmaskRules,
+   │        ExportOriginReport, CheckTools, …
+   │  Events (typed Go values): trace:hop, trace:geo, trace:done, scan:targets,
+   │        scan:crawlPage, scan:crawlLog, portscan:open, net:data,
+   │        domain:progress, origin:progress, origin:log, …
    ▼
 Go backend (in-process)
    ├── tracerouter  spawn system traceroute/tracert, parse output
@@ -153,6 +174,8 @@ Go backend (in-process)
    ├── portscan     TCP connect / UDP port scan + banner/HTTP/TLS probing
    ├── origin       keyless origin discovery behind CDNs/proxies ("unmask")
    ├── netcat       interactive TCP sessions (optional TLS)
+   ├── mapdata      embedded Natural Earth basemap + Web Mercator
+   ├── mapview      QPainter map widget (layers, pan/zoom, hit-testing)
    └── history      saved traces/scans (SQLite snapshot store)
 ```
 
@@ -162,70 +185,83 @@ concurrent traces (`0` is the single-trace view; a scan assigns `1..N`).
 ## Requirements
 
 - **Go** 1.26+
-- **Node.js** and **npm**
-- **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
-- **Linux system packages** (Fedora): `gcc-c++ gtk3-devel webkit2gtk4.1-devel`
-  - Debian/Ubuntu: `gcc g++ libgtk-3-dev libwebkit2gtk-4.1-dev`
+- **Qt6 development packages** and a C++ compiler (cgo)
+  - Fedora: `sudo dnf install qt6-qtbase-devel gcc-c++`
+  - Debian/Ubuntu: `sudo apt-get install qt6-base-dev g++`
+  - macOS: `brew install qt`
 - A system traceroute tool: `traceroute` (Linux/macOS), or a fallback of
   `tracepath`/`mtr`; Windows ships `tracert`. tracemap discovers the first one
   available on `PATH` or at conventional install locations. If none is found,
-  the app opens a modal with the install command for your platform.
+  the app warns before running a trace.
 
-Run `make sysdeps` to verify the Linux build/runtime dependencies.
+Run `make sysdeps` to verify the Qt6 build dependencies.
 
 ## Build & run
 
-Everything goes through the `Makefile`. On Linux the build needs the
-`webkit2_41` tag; the Makefile auto-detects it, so just use `make`.
+Everything goes through the `Makefile`. The map is drawn by our own QPainter
+code, so there is no Node/webview build step.
 
 ```sh
-make dev          # hot-reload dev app
+make dev          # run the app directly from source
 make build        # release binary -> build/bin/traceroute
 make run          # build then launch
-make check        # go vet + go test + tsc --noEmit
-make bindings     # regenerate frontend/wailsjs from the Go bound methods
-make sysdeps      # verify Linux build/runtime dependencies
-make clean        # remove build/bin, frontend/dist
+make check        # go vet + go test + go build
+make sysdeps      # verify the Qt6 build dependencies
+make clean        # remove build/bin
 ```
+
+The first build compiles miqt's generated Qt6 bindings and can take a few
+minutes; later builds are incremental.
 
 ## Usage
 
 1. Type a hostname or IP into **TARGET / DOMAIN** and press **Trace**
    (or `Enter`).
+   The **MAX HOPS** field in the toolbar sets the hop limit for traces.
 2. Press **Scan** to open the scan options (DNS records, subdomain discovery,
    web crawl, and whether to auto-trace or review). Each target gets its own
-   colour in the legend and hop list. As each step starts, it opens its own
-   terminal window with verbose logs; discovered subdomains appear in the
-   **SUBDOMAINS** pane, where you can select which ones to trace. Brute force can
-   use the embedded wordlist or a custom file chosen with **Browse**.
+   colour in the map's TRACES legend overlay and in the hop list. Uncheck a
+   trace's checkbox in the **TARGETS** list to hide it from the map. As each step
+   starts, it opens its own terminal window with verbose logs; discovered
+   subdomains appear in the **SUBDOMAINS** list in the right sidebar, where you
+   can select which ones to trace. Brute force can use the embedded wordlist or a
+   custom file chosen with **Browse**.
 3. Open **Tools ▾** and choose **Port scan** to scan the target, or right-click a
-   target in the **TARGETS** pane, a hop in the hop list, or a marker on the map
-   and choose **Find open ports**. Pick **Common ports** (Top 20/100/1000) or a
-   **Port range**, choose TCP or UDP, and optionally identify protocols. Open
-   ports stream into the dialog as they are found.
+   target in the **TARGETS** list, a hop in the hop list, or a marker on the map
+   and choose **Find open ports**. Pick the **Scope** (this host or all targets
+   from the last scan), a **Preset** (Top 20/100/1000) or a **Custom range**,
+   choose TCP or UDP, and optionally identify protocols. Open ports stream into
+   the dialog as they are found; **Export report** saves the full scan context.
 4. Open **Tools ▾** and choose **Domain analysis** for a security and reliability
    report on the current domain: WHOIS/RDAP registration, DNS and email-auth
    records, DNSSEC/CAA and web/TLS. The checklist shows pass/warn/fail with a
    score and grade; **Export** writes the full report to a text file.
 5. Open **Tools ▾** and choose **Unmask target** (available once a scan has
-   completed) to hunt for the origin behind a CDN/proxy. Pick the default marker
-   rules or load `unmask-rules.json`, optionally create that file from the
-   built-in defaults, then run it: the dialog shows the proxied baseline and each
-   candidate's verdict with its evidence, while a LIVE LOG pane streams the
-   step-by-step detail. Confirmed and likely origins appear as 🏢 markers on the
-   map; **Export** writes a text report.
-6. Open **Tools ▾** and choose **Netcat** (or right-click a target/hop and choose
-   **Connect (nc)**) to open a netcat session in its own floating window. Enter
-   a port, optionally enable **TLS**, connect, and type lines to send; output
-   streams into the terminal. Choose the line ending (LF/CRLF/none) and press
-   **Disconnect** when done. Each session gets its own window. **Tools ▾ →
-   Console** opens the general activity console.
+   completed) to hunt for the origin behind a CDN/proxy. Use the built-in marker
+   rules, or tick **Use custom rules** to load `unmask-rules.json` and
+   **Create rules file** to copy the built-in defaults there, then run it: the
+   dialog shows the proxied baseline and each candidate's verdict with its
+   evidence, while a LIVE LOG pane streams the step-by-step detail. Confirmed and
+   likely origins appear as 🏢 markers on the map; **Export report** writes a
+   text report. **Cancel** stops a running run.
+6. Open **Tools ▾** and choose **Netcat** (or use **Netcat…** in the port-scan
+   row menu) to open a netcat session in its own floating window. Enter a host,
+   port and connect timeout, optionally enable **TLS** and set an SNI name,
+   connect, and type lines to send; output streams into the terminal. Press
+   **Disconnect** when done (closing the window does too). Each session gets its
+   own window. **Tools ▾ → Console** opens the general activity console.
 7. Click a splitter between the map and a side panel to collapse or expand that
    panel — handy when you want more room for the map. Drag the splitter to
    resize instead.
-8. Press `Esc` or **Cancel** to stop a running operation.
-9. Press **+ History** to save the current view, and **History** to browse
-   saved entries.
+8. Press **Cancel** to stop a running trace/scan; the domain, unmask, endpoint
+   and port windows have their own **Cancel** buttons.
+9. Press **+ History** to save the current view, and **History** to browse,
+   load, correlate, delete or clear saved entries.
+10. **Tools ▾** also opens the **GeoIP cache** (filter, delete single entries or
+    clear all), the **Country IP blocks** browser (family and CIDR filters, plus
+    export of a country's matching CIDR list), and **Endpoint analysis**
+    (analyze the entered host plus any discovered subdomains, crawled pages or
+    HTTP port services in bulk).
 
 Hops that have no coordinates (private addresses, geolocation misses) stay in
 the hop list but are omitted from the map. Located hops show their
@@ -236,15 +272,14 @@ even if the trace never reaches it.
 ## History & comparison
 
 - **Saving is explicit** — nothing is stored until you choose **+ History**.
-- The **History** modal lists every saved entry with its kind, target, path
+- The **History** window lists every saved entry with its kind, target, path
   count, hop count and timestamp. Select one or more entries and choose
-  **Show on map** to replay them in the main view.
-- In history view, the app bar shows `HISTORY · N paths`, and an **EXIT**
-  button returns to the live view (running a new trace does too).
+  **Load selected** to replay them, or **Correlate selected** to merge their
+  hops into the correlation view.
 - Hops present in two or more traces are highlighted as **shared** on the map
   and badged in the hop list — the quickest way to spot common paths and
   correlation points.
-- Entries can be deleted individually or all at once.
+- Entries can be deleted individually (**Delete**) or all at once (**Clear all**).
 
 ## Configuration
 
@@ -273,8 +308,8 @@ Only remote replies are cached.
 The intermediary markers the **Unmask target** tool uses to recognise a proxy
 response live in `unmask-rules.json` next to the database
 (`~/.config/traceroute/unmask-rules.json` on Linux). It is optional: when it is
-absent the built-in defaults are used. Choose **Load rules file** in the dialog
-to use it, or **Create rules config** to copy the built-in markers there for
+absent the built-in defaults are used. Tick **Use custom rules** in the dialog
+to load it, or **Create rules file** to copy the built-in markers there for
 editing. The file is plain JSON:
 
 ```json
@@ -294,8 +329,17 @@ editing. The file is plain JSON:
 ## Development
 
 ```
-main.go                     Wails entry; embeds frontend/dist; window options
-app.go                      App struct, bound methods, events
+main.go                     Qt entry: QApplication + world load + run UI
+app.go                      App struct + backend methods + event DTOs
+emit.go                     EventSink + Dialogs interfaces
+ui_app.go / ui_model.go     Qt controller, sidebar, map model, correlation
+ui_logwindow.go             floating per-channel log windows
+ui_dialogs.go               native Qt dialogs for the backend
+ui_scan.go / ui_port.go     scan and port-scan windows
+ui_tools.go                 domain / unmask / endpoint / GeoIP cache / blocks
+ui_netcat.go                interactive TCP sessions
+internal/mapdata/           embedded Natural Earth basemap + Web Mercator
+internal/mapview/           hand-painted QPainter map widget
 internal/tracerouter/       spawn system traceroute/tracert, parse output
 internal/geolocator/        IP → geo (remote-first, SQLite cache, mmdb fallback)
 internal/dnscheck/          A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
@@ -307,8 +351,6 @@ internal/origin/            keyless origin discovery behind CDNs/proxies ("unmas
 internal/netcat/            interactive TCP sessions (optional TLS)
 internal/history/           saved traces/scans (SQLite snapshot store)
 internal/appdata/           shared SQLite database path (tracemap.db)
-frontend/src/               React app
-frontend/wailsjs/           generated bindings — do not edit by hand
 ```
 
 ### Testing

@@ -14,8 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"traceroute/internal/appdata"
 	"traceroute/internal/dnscheck"
 	"traceroute/internal/domaincheck"
@@ -124,6 +122,11 @@ type ScanOptions struct {
 	AutoTrace bool `json:"autoTrace"`
 	// MaxTargets caps how many addresses are traced (0 uses the default).
 	MaxTargets int `json:"maxTargets"`
+	// SubdomainConcurrency bounds parallel subdomain lookups (0 uses the
+	// default).
+	SubdomainConcurrency int `json:"subdomainConcurrency"`
+	// SubdomainRate caps subdomain lookups per second (0 uses the default).
+	SubdomainRate int `json:"subdomainRate"`
 }
 
 // TraceTargetsRequest traces an explicit set of hostnames, used after the user
@@ -421,18 +424,21 @@ type EndpointLogEvent struct {
 	Message string `json:"message"`
 }
 
-// App is the Wails application backend.
+// App is the application backend. It is toolkit-agnostic: results are streamed
+// through the installed EventSink and native dialogs go through Dialogs.
 type App struct {
-	ctx    context.Context
-	runner *tracerouter.Runner
-	geo    *geolocator.Resolver
-	hist   *history.Store
-	subs   *subdomains.Store
-	ports  *portscan.Scanner
-	nc     *netcat.Manager
-	domain *domaincheck.Analyzer
-	hs     *hostscan.Scanner
-	ipb    *ipblocks.DB
+	ctx     context.Context
+	emit    EventSink
+	dialogs Dialogs
+	runner  *tracerouter.Runner
+	geo     *geolocator.Resolver
+	hist    *history.Store
+	subs    *subdomains.Store
+	ports   *portscan.Scanner
+	nc      *netcat.Manager
+	domain  *domaincheck.Analyzer
+	hs      *hostscan.Scanner
+	ipb     *ipblocks.DB
 
 	// Each independent operation family owns a canceler so a run cannot
 	// accidentally clear a newer run's cancellation handle.
@@ -447,12 +453,14 @@ type App struct {
 // NewApp creates the application backend.
 func NewApp() *App {
 	app := &App{
-		runner: tracerouter.NewRunner(),
-		geo:    geolocator.NewResolver(),
-		ports:  portscan.NewScanner(),
-		nc:     netcat.NewManager(),
-		domain: domaincheck.NewAnalyzer(),
-		hs:     hostscan.NewScanner(),
+		emit:    func(string, any) {},
+		dialogs: noDialogs{},
+		runner:  tracerouter.NewRunner(),
+		geo:     geolocator.NewResolver(),
+		ports:   portscan.NewScanner(),
+		nc:      netcat.NewManager(),
+		domain:  domaincheck.NewAnalyzer(),
+		hs:      hostscan.NewScanner(),
 	}
 
 	store, err := history.Open(appdata.DefaultPath())
@@ -515,12 +523,9 @@ func (a *App) CheckTools() ToolStatus {
 // PickWordlist opens a native file chooser and returns the selected wordlist
 // path, or "" when the user cancels.
 func (a *App) PickWordlist() (string, error) {
-	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select subdomain wordlist",
-		Filters: []runtime.FileFilter{
-			{DisplayName: "Wordlists (*.txt, *.lst)", Pattern: "*.txt;*.lst"},
-			{DisplayName: "All files", Pattern: "*"},
-		},
+	return a.dialogs.OpenFile("Select subdomain wordlist", []FileFilter{
+		{DisplayName: "Wordlists (*.txt, *.lst)", Pattern: "*.txt;*.lst"},
+		{DisplayName: "All files", Pattern: "*"},
 	})
 }
 
@@ -550,7 +555,19 @@ func (a *App) Scan(req ScanRequest) error {
 	if opts.ExpandNS {
 		records = dnscheck.Expand(ctx, resolver, req.Domain, records, dnscheck.MaxNSDepth)
 	}
-	runtime.EventsEmit(a.ctx, EventScanRecords, records)
+	a.emit(EventScanRecords, records)
+
+	limit := opts.MaxTargets
+	if limit <= 0 {
+		limit = dnscheck.MaxTargets
+	}
+
+	// Resolve the addresses to trace while subdomain discovery and the crawl
+	// run: both only depend on the DNS records gathered above.
+	targetsCh := make(chan []dnscheck.Target, 1)
+	go func() {
+		targetsCh <- dnscheck.AllTargets(ctx, resolver, req.Domain, records)
+	}()
 
 	var discovered []subdomains.Result
 	var crawlResult webcrawl.Result
@@ -561,7 +578,7 @@ func (a *App) Scan(req ScanRequest) error {
 		words, err := subdomains.LoadWordlist(path)
 		if err != nil {
 			message := fmt.Sprintf("could not read subdomain wordlist: %v", err)
-			runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+			a.emit(EventError, ErrorEvent{Target: 0, Message: message})
 			return errors.New(message)
 		}
 		wordlist = words
@@ -571,10 +588,10 @@ func (a *App) Scan(req ScanRequest) error {
 		// Announce each enabled step before it starts, so the UI opens its
 		// terminal window even when a step fetches nothing or fails.
 		if dnsDiscovery {
-			runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{Phase: "subdomains"})
+			a.emit(EventScanProgress, ScanProgressEvent{Phase: "subdomains"})
 		}
 		if opts.Crawl {
-			runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{Phase: "crawl"})
+			a.emit(EventScanProgress, ScanProgressEvent{Phase: "crawl"})
 		}
 
 		var wg sync.WaitGroup
@@ -583,18 +600,20 @@ func (a *App) Scan(req ScanRequest) error {
 			go func() {
 				defer wg.Done()
 				discovered = subdomains.Discover(ctx, net.DefaultResolver, req.Domain, subdomains.Options{
-					BruteForce: opts.BruteForce,
-					PTR:        opts.PTR,
-					Sweep24:    opts.Sweep24,
-					Services:   opts.Services,
-					Wordlist:   wordlist,
+					BruteForce:    opts.BruteForce,
+					PTR:           opts.PTR,
+					Sweep24:       opts.Sweep24,
+					Services:      opts.Services,
+					Wordlist:      wordlist,
+					Concurrency:   opts.SubdomainConcurrency,
+					RatePerSecond: opts.SubdomainRate,
 					OnProgress: func(phase string, done, total, found int) {
-						runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{
+						a.emit(EventScanProgress, ScanProgressEvent{
 							Phase: phase, Done: done, Total: total, Found: found,
 						})
 					},
 					OnLog: func(level, message string) {
-						runtime.EventsEmit(a.ctx, EventSubdomainLog, CrawlLogEvent{Level: level, Message: message})
+						a.emit(EventSubdomainLog, CrawlLogEvent{Level: level, Message: message})
 					},
 				}, a.subs)
 			}()
@@ -606,15 +625,15 @@ func (a *App) Scan(req ScanRequest) error {
 				crawlResult = webcrawl.Crawl(ctx, req.Domain, webcrawl.Options{
 					MaxPages: opts.CrawlMaxPages,
 					OnPage: func(page webcrawl.Page) {
-						runtime.EventsEmit(a.ctx, EventCrawlPage, page)
+						a.emit(EventCrawlPage, page)
 					},
 					OnProgress: func(done, total, found int) {
-						runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{
+						a.emit(EventScanProgress, ScanProgressEvent{
 							Phase: "crawl", Done: done, Total: total, Found: found,
 						})
 					},
 					OnLog: func(level, message string) {
-						runtime.EventsEmit(a.ctx, EventCrawlLog, CrawlLogEvent{Level: level, Message: message})
+						a.emit(EventCrawlLog, CrawlLogEvent{Level: level, Message: message})
 					},
 				})
 			}()
@@ -626,19 +645,15 @@ func (a *App) Scan(req ScanRequest) error {
 			persistCrawlSubdomains(ctx, a.subs, req.Domain, crawlSubs, discovered)
 			discovered = mergeSubdomainResults(discovered, crawlSubs)
 			crawlResult.Pages = stripPageBodies(crawlResult.Pages)
-			runtime.EventsEmit(a.ctx, EventCrawl, crawlResult)
+			a.emit(EventCrawl, crawlResult)
 		}
 		if discovered == nil {
 			discovered = []subdomains.Result{}
 		}
-		runtime.EventsEmit(a.ctx, EventSubdomains, discovered)
+		a.emit(EventSubdomains, discovered)
 	}
 
-	limit := opts.MaxTargets
-	if limit <= 0 {
-		limit = dnscheck.MaxTargets
-	}
-	targets := dnscheck.AllTargets(ctx, resolver, req.Domain, records)
+	targets := <-targetsCh
 	if opts.AutoTrace && len(discovered) > 0 {
 		targets = appendSubdomainTargets(targets, discovered, limit)
 	}
@@ -646,7 +661,7 @@ func (a *App) Scan(req ScanRequest) error {
 	targets = filterUnroutable(targets)
 	if len(targets) == 0 {
 		message := fmt.Sprintf("no routable address records found for %s", req.Domain)
-		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+		a.emit(EventError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
 	}
 
@@ -678,7 +693,7 @@ func (a *App) TraceTargets(req TraceTargetsRequest) error {
 	targets = filterUnroutable(targets)
 	if len(targets) == 0 {
 		message := "no routable addresses to trace for the selected subdomains"
-		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+		a.emit(EventError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
 	}
 
@@ -697,7 +712,7 @@ func (a *App) TraceBlock(req TraceBlockRequest) error {
 	network, ok := hostscan.ParseCIDR(req.CIDR)
 	if !ok {
 		message := fmt.Sprintf("invalid IPv4 CIDR block %q", strings.TrimSpace(req.CIDR))
-		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+		a.emit(EventError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
 	}
 	discoveryPorts := portscan.Top100
@@ -706,19 +721,19 @@ func (a *App) TraceBlock(req TraceBlockRequest) error {
 		parsed, err := portscan.ParsePorts(spec)
 		if err != nil {
 			message := fmt.Sprintf("invalid port list %q: %v", spec, err)
-			runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+			a.emit(EventError, ErrorEvent{Target: 0, Message: message})
 			return errors.New(message)
 		}
 		discoveryPorts = parsed
 		portsLabel = fmt.Sprintf("%d port(s)", len(parsed))
 	}
 	total := hostscan.Count(network)
-	runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
+	a.emit(EventBlockLog, BlockLogEvent{
 		Level:   "info",
 		Message: fmt.Sprintf("discovering live hosts in %s · %d addresses · %s", strings.TrimSpace(req.CIDR), total, portsLabel),
 	})
 	if total > 65536 {
-		runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
+		a.emit(EventBlockLog, BlockLogEvent{
 			Level:   "warn",
 			Message: fmt.Sprintf("large block · %d addresses · discovery may take a long time", total),
 		})
@@ -726,33 +741,33 @@ func (a *App) TraceBlock(req TraceBlockRequest) error {
 
 	live, err := a.hs.Discover(ctx, network, hostscan.Options{Ports: discoveryPorts}, hostscan.Observer{
 		OnFound: func(host string, openPort int) {
-			runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
+			a.emit(EventBlockLog, BlockLogEvent{
 				Level:   "ok",
 				Message: fmt.Sprintf("live %s · tcp/%d open", host, openPort),
 			})
 		},
 		OnProgress: func(done, hostTotal uint64, found int) {
-			runtime.EventsEmit(a.ctx, EventScanProgress, ScanProgressEvent{
+			a.emit(EventScanProgress, ScanProgressEvent{
 				Phase: "discover", Done: int(done), Total: int(hostTotal), Found: found,
 			})
 		},
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
-		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: err.Error()})
+		a.emit(EventError, ErrorEvent{Target: 0, Message: err.Error()})
 		return err
 	}
 	if ctx.Err() != nil {
 		// Cancelled during discovery: close out the operation so the UI
 		// clears its busy state (there are no targets to trace).
-		runtime.EventsEmit(a.ctx, EventScanDone, 0)
+		a.emit(EventScanDone, 0)
 		return ctx.Err()
 	}
 	if len(live) == 0 {
 		message := fmt.Sprintf("no live hosts found in %s", strings.TrimSpace(req.CIDR))
-		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+		a.emit(EventError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
 	}
-	runtime.EventsEmit(a.ctx, EventBlockLog, BlockLogEvent{
+	a.emit(EventBlockLog, BlockLogEvent{
 		Level:   "ok",
 		Message: fmt.Sprintf("%d live host(s) discovered — tracing", len(live)),
 	})
@@ -769,7 +784,7 @@ func (a *App) TraceBlock(req TraceBlockRequest) error {
 // traceScan announces the targets and runs their traces with bounded
 // concurrency, then reports completion.
 func (a *App) traceScan(ctx context.Context, targets []dnscheck.Target, maxHops int) error {
-	runtime.EventsEmit(a.ctx, EventScanTargets, targets)
+	a.emit(EventScanTargets, targets)
 
 	sem := make(chan struct{}, scanConcurrency)
 	var wg sync.WaitGroup
@@ -784,7 +799,7 @@ func (a *App) traceScan(ctx context.Context, targets []dnscheck.Target, maxHops 
 	}
 	wg.Wait()
 
-	runtime.EventsEmit(a.ctx, EventScanDone, len(targets))
+	a.emit(EventScanDone, len(targets))
 	return nil
 }
 
@@ -885,6 +900,16 @@ func mergeSubdomainResults(base, extra []subdomains.Result) []subdomains.Result 
 // probes at once. Each target already fans out over its ports internally.
 const portScanHostConcurrency = 4
 
+// portProbeBudget sizes the shared probe pool for one port-scan operation: up
+// to portScanHostConcurrency hosts probing with the request's per-host
+// concurrency, so the pool is the total number of probes in flight at once.
+func portProbeBudget(perHost int) int {
+	if perHost <= 0 {
+		perHost = portscan.DefaultConcurrency
+	}
+	return portScanHostConcurrency * perHost
+}
+
 // ScanPorts probes one or more targets for open ports, emitting each open port
 // as it is found. Results stream through portscan:open/portscan:progress and
 // finish with portscan:done (or portscan:error).
@@ -894,7 +919,7 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 
 	ports, err := resolveScanPorts(req)
 	if err != nil {
-		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: err.Error()})
+		a.emit(EventPortError, ErrorEvent{Target: 0, Message: err.Error()})
 		return err
 	}
 
@@ -908,15 +933,27 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 	}
 
 	if cidr := strings.TrimSpace(req.CIDR); cidr != "" {
-		return a.scanPortBlock(ctx, cidr, ports, opts)
+		pool := portscan.NewPool(a.ports, portProbeBudget(req.Concurrency))
+		defer pool.Close()
+		return a.scanPortBlock(ctx, pool, cidr, ports, opts)
 	}
 
 	targets := normalizePortScanTargets(req)
 	if len(targets) == 0 {
 		message := "no host to scan"
-		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: message})
+		a.emit(EventPortError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
 	}
+
+	// One shared worker pool for the whole operation: every host draws on the
+	// same bounded set of workers instead of each spawning its own. Size it to
+	// the total work so a small scan does not start idle workers.
+	budget := portProbeBudget(req.Concurrency)
+	if maxJobs := len(ports) * len(targets); maxJobs < budget {
+		budget = maxJobs
+	}
+	pool := portscan.NewPool(a.ports, budget)
+	defer pool.Close()
 
 	var (
 		open    int64
@@ -932,15 +969,15 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			_, err := a.ports.Scan(ctx, tgt.Host, opts, portscan.Observer{
+			_, err := pool.Scan(ctx, tgt.Host, opts, portscan.Observer{
 				OnOpen: func(result portscan.Result) {
 					atomic.AddInt64(&open, 1)
-					runtime.EventsEmit(a.ctx, EventPortOpen, PortOpenEvent{
+					a.emit(EventPortOpen, PortOpenEvent{
 						Host: tgt.Host, Label: tgt.Label, Result: result,
 					})
 				},
 				OnProgress: func(done, total, openCount int) {
-					runtime.EventsEmit(a.ctx, EventPortProgress, PortScanProgressEvent{
+					a.emit(EventPortProgress, PortScanProgressEvent{
 						Host: tgt.Host, Done: done, Total: total, Open: openCount,
 						Target: idx + 1, Targets: len(targets),
 					})
@@ -958,10 +995,10 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 	wg.Wait()
 
 	if scanErr != nil {
-		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: scanErr.Error()})
+		a.emit(EventPortError, ErrorEvent{Target: 0, Message: scanErr.Error()})
 		return scanErr
 	}
-	runtime.EventsEmit(a.ctx, EventPortDone, PortScanDoneEvent{
+	a.emit(EventPortDone, PortScanDoneEvent{
 		Host: targets[0].Host, Scanned: len(ports), Open: int(atomic.LoadInt64(&open)),
 		Targets: len(targets),
 	})
@@ -973,17 +1010,17 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 // keep the event stream bounded) through portscan:progress, using Target/Targets
 // for the host index/count and Done/Total for hosts completed. It ends with
 // portscan:done.
-func (a *App) scanPortBlock(ctx context.Context, cidr string, ports []int, opts portscan.Options) error {
+func (a *App) scanPortBlock(ctx context.Context, pool *portscan.Pool, cidr string, ports []int, opts portscan.Options) error {
 	network, ok := hostscan.ParseCIDR(cidr)
 	if !ok {
 		message := fmt.Sprintf("invalid IPv4 CIDR block %q", cidr)
-		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: message})
+		a.emit(EventPortError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
 	}
 	total := hostscan.Count(network)
 	if total == 0 {
 		message := fmt.Sprintf("no usable addresses in %s", cidr)
-		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: message})
+		a.emit(EventPortError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
 	}
 
@@ -1010,10 +1047,10 @@ func (a *App) scanPortBlock(ctx context.Context, cidr string, ports []int, opts 
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			_, err := a.ports.Scan(ctx, h, opts, portscan.Observer{
+			_, err := pool.Scan(ctx, h, opts, portscan.Observer{
 				OnOpen: func(result portscan.Result) {
 					atomic.AddInt64(&open, 1)
-					runtime.EventsEmit(a.ctx, EventPortOpen, PortOpenEvent{
+					a.emit(EventPortOpen, PortOpenEvent{
 						Host: h, Label: h, Result: result,
 					})
 				},
@@ -1027,7 +1064,7 @@ func (a *App) scanPortBlock(ctx context.Context, cidr string, ports []int, opts 
 			}
 			// Report host-level progress once the host's ports are done.
 			n := atomic.AddUint64(&completed, 1)
-			runtime.EventsEmit(a.ctx, EventPortProgress, PortScanProgressEvent{
+			a.emit(EventPortProgress, PortScanProgressEvent{
 				Host: h, Done: int(n), Total: int(total), Open: int(atomic.LoadInt64(&open)),
 				Target: int(n), Targets: int(total),
 			})
@@ -1037,10 +1074,10 @@ func (a *App) scanPortBlock(ctx context.Context, cidr string, ports []int, opts 
 	wg.Wait()
 
 	if scanErr != nil {
-		runtime.EventsEmit(a.ctx, EventPortError, ErrorEvent{Target: 0, Message: scanErr.Error()})
+		a.emit(EventPortError, ErrorEvent{Target: 0, Message: scanErr.Error()})
 		return scanErr
 	}
-	runtime.EventsEmit(a.ctx, EventPortDone, PortScanDoneEvent{
+	a.emit(EventPortDone, PortScanDoneEvent{
 		Host: cidr, Scanned: len(ports), Open: int(atomic.LoadInt64(&open)),
 		Targets: int(total),
 	})
@@ -1090,7 +1127,7 @@ func (a *App) NetConnect(req NetConnectRequest) (NetSession, error) {
 	host := strings.TrimSpace(req.Host)
 	if host == "" {
 		message := "no host to connect to"
-		runtime.EventsEmit(a.ctx, EventNetError, ErrorEvent{Target: 0, Message: message})
+		a.emit(EventNetError, ErrorEvent{Target: 0, Message: message})
 		return NetSession{}, errors.New(message)
 	}
 
@@ -1102,14 +1139,14 @@ func (a *App) NetConnect(req NetConnectRequest) (NetSession, error) {
 		ServerName: req.ServerName,
 	}, netcat.Observer{
 		OnData: func(id string, data []byte) {
-			runtime.EventsEmit(a.ctx, EventNetData, NetDataEvent{Session: id, Data: data})
+			a.emit(EventNetData, NetDataEvent{Session: id, Data: data})
 		},
 		OnClose: func(id, reason string) {
-			runtime.EventsEmit(a.ctx, EventNetClosed, NetClosedEvent{Session: id, Reason: reason})
+			a.emit(EventNetClosed, NetClosedEvent{Session: id, Reason: reason})
 		},
 	})
 	if err != nil {
-		runtime.EventsEmit(a.ctx, EventNetError, ErrorEvent{Target: 0, Message: err.Error()})
+		a.emit(EventNetError, ErrorEvent{Target: 0, Message: err.Error()})
 		return NetSession{}, err
 	}
 
@@ -1138,7 +1175,7 @@ func (a *App) AnalyzeDomain(domain string) (domaincheck.Report, error) {
 	defer end()
 
 	report, err := a.domain.Analyze(ctx, domain, func(phase, message string) {
-		runtime.EventsEmit(a.ctx, EventDomainProgress, DomainProgressEvent{Phase: phase, Message: message})
+		a.emit(EventDomainProgress, DomainProgressEvent{Phase: phase, Message: message})
 	})
 	if err != nil {
 		return report, err
@@ -1170,13 +1207,9 @@ func (a *App) saveTextReport(title, defaultName, content string) (string, error)
 // saveReport asks the user for a destination matching the supplied filter and
 // writes content there. It returns the chosen path, or "" when cancelled.
 func (a *App) saveReport(title, defaultName, displayName, pattern, content string) (string, error) {
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		Title:           title,
-		DefaultFilename: defaultName,
-		Filters: []runtime.FileFilter{
-			{DisplayName: displayName, Pattern: pattern},
-			{DisplayName: "All files", Pattern: "*"},
-		},
+	path, err := a.dialogs.SaveFile(title, defaultName, []FileFilter{
+		{DisplayName: displayName, Pattern: pattern},
+		{DisplayName: "All files", Pattern: "*"},
 	})
 	if err != nil {
 		return "", err
@@ -1216,7 +1249,7 @@ func (a *App) UnmaskTarget(domain string, customRules bool) (origin.Report, erro
 	if customRules {
 		loaded, err := origin.LoadRules(unmaskRulesPath())
 		if err != nil {
-			runtime.EventsEmit(a.ctx, EventError, ErrorEvent{
+			a.emit(EventError, ErrorEvent{
 				Target:  0,
 				Message: fmt.Sprintf("unmask rules file could not be read, using defaults: %v", err),
 			})
@@ -1228,10 +1261,10 @@ func (a *App) UnmaskTarget(domain string, customRules bool) (origin.Report, erro
 		Subdomains: subs,
 		Rules:      rules,
 		OnProgress: func(phase, message string) {
-			runtime.EventsEmit(a.ctx, EventOriginProgress, OriginProgressEvent{Phase: phase, Message: message})
+			a.emit(EventOriginProgress, OriginProgressEvent{Phase: phase, Message: message})
 		},
 		OnLog: func(level, message string) {
-			runtime.EventsEmit(a.ctx, EventOriginLog, OriginLogEvent{Level: level, Message: message})
+			a.emit(EventOriginLog, OriginLogEvent{Level: level, Message: message})
 		},
 	})
 
@@ -1273,16 +1306,7 @@ func (a *App) CreateUnmaskRules() (string, error) {
 		return "", errors.New("no configuration directory available")
 	}
 	if _, err := os.Stat(path); err == nil {
-		choice, err := runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
-			Type:    runtime.QuestionDialog,
-			Title:   "Unmask rules",
-			Message: "The rules file already exists. Overwrite it with the built-in defaults?",
-			Buttons: []string{"Overwrite", "Cancel"},
-		})
-		if err != nil {
-			return "", err
-		}
-		if choice != "Overwrite" {
+		if !a.dialogs.Confirm("Unmask rules", "The rules file already exists. Overwrite it with the built-in defaults?") {
 			return "", nil
 		}
 	}
@@ -1347,11 +1371,11 @@ func (a *App) AnalyzeEndpoints(req EndpointAnalysisRequest) ([]httpcheck.Report,
 	targets, dropped := normalizeEndpointTargets(req)
 	if len(targets) == 0 {
 		message := "no endpoints to analyze"
-		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: 0, Message: message})
+		a.emit(EventError, ErrorEvent{Target: 0, Message: message})
 		return nil, errors.New(message)
 	}
 	if dropped > 0 {
-		runtime.EventsEmit(a.ctx, EventHTTPLog, EndpointLogEvent{
+		a.emit(EventHTTPLog, EndpointLogEvent{
 			Level:   "warn",
 			Message: fmt.Sprintf("%d endpoint(s) beyond the %d limit were skipped", dropped, maxEndpoints),
 		})
@@ -1375,7 +1399,7 @@ func (a *App) AnalyzeEndpoints(req EndpointAnalysisRequest) ([]httpcheck.Report,
 
 			report := httpcheck.Analyze(ctx, tgt.URL, httpcheck.Options{
 				OnLog: func(level, message string) {
-					runtime.EventsEmit(a.ctx, EventHTTPLog, EndpointLogEvent{
+					a.emit(EventHTTPLog, EndpointLogEvent{
 						URL: tgt.URL, Label: tgt.Label, Level: level, Message: message,
 					})
 				},
@@ -1383,8 +1407,8 @@ func (a *App) AnalyzeEndpoints(req EndpointAnalysisRequest) ([]httpcheck.Report,
 			reports[idx] = report
 
 			n := atomic.AddInt64(&done, 1)
-			runtime.EventsEmit(a.ctx, EventHTTPResult, report)
-			runtime.EventsEmit(a.ctx, EventHTTPProgress, EndpointProgressEvent{
+			a.emit(EventHTTPResult, report)
+			a.emit(EventHTTPProgress, EndpointProgressEvent{
 				URL: tgt.URL, Done: int(n), Total: len(targets),
 			})
 		}(index, target)
@@ -1820,7 +1844,7 @@ func (a *App) ExportCountryBlocks(req CountryBlocksRequest) (string, error) {
 // ipbProgress forwards database-walk progress to the frontend.
 func (a *App) ipbProgress(phase string) ipblocks.ProgressFunc {
 	return func(done, total int) {
-		runtime.EventsEmit(a.ctx, EventIPBlocksProgress, IPBlocksProgressEvent{
+		a.emit(EventIPBlocksProgress, IPBlocksProgressEvent{
 			Phase: phase, Done: done, Total: total,
 		})
 	}
@@ -1913,7 +1937,7 @@ func (a *App) runTrace(ctx context.Context, target int, host string, maxHops int
 	err := a.runner.ExecuteStream(ctx, host, opts, tracerouter.Observer{
 		OnHop: func(h tracerouter.Hop) {
 			count++
-			runtime.EventsEmit(a.ctx, EventHop, HopEvent{
+			a.emit(EventHop, HopEvent{
 				Target: target,
 				Hop:    h.Number,
 				IP:     h.IP,
@@ -1924,17 +1948,17 @@ func (a *App) runTrace(ctx context.Context, target int, host string, maxHops int
 			}
 		},
 		OnTarget: func(ip string) {
-			runtime.EventsEmit(a.ctx, EventTarget, TargetEvent{Target: target, IP: ip})
+			a.emit(EventTarget, TargetEvent{Target: target, IP: ip})
 			go a.emitTargetGeo(ctx, target, ip)
 		},
 	})
 
 	switch {
 	case err == nil, errors.Is(err, context.Canceled):
-		runtime.EventsEmit(a.ctx, EventDone, DoneEvent{Target: target, Hops: count})
+		a.emit(EventDone, DoneEvent{Target: target, Hops: count})
 		return nil
 	case errors.Is(err, context.DeadlineExceeded):
-		runtime.EventsEmit(a.ctx, EventError, ErrorEvent{Target: target, Message: "trace timed out"})
+		a.emit(EventError, ErrorEvent{Target: target, Message: "trace timed out"})
 		return err
 	default:
 		event := ErrorEvent{Target: target, Message: err.Error()}
@@ -1942,7 +1966,7 @@ func (a *App) runTrace(ctx context.Context, target int, host string, maxHops int
 			event.Code = "missing-tool"
 			event.Hint = tracerouter.InstallHint()
 		}
-		runtime.EventsEmit(a.ctx, EventError, event)
+		a.emit(EventError, event)
 		return err
 	}
 }
@@ -1970,7 +1994,7 @@ func (a *App) emitGeo(ctx context.Context, target, hop int, ip string) {
 	if !ok {
 		return
 	}
-	runtime.EventsEmit(a.ctx, EventGeo, GeoEvent{Target: target, Hop: hop, Geo: data})
+	a.emit(EventGeo, GeoEvent{Target: target, Hop: hop, Geo: data})
 }
 
 // emitTargetGeo resolves the target address and emits an EventTargetGeo so the
@@ -1980,5 +2004,5 @@ func (a *App) emitTargetGeo(ctx context.Context, target int, ip string) {
 	if !ok {
 		return
 	}
-	runtime.EventsEmit(a.ctx, EventTargetGeo, TargetGeoEvent{Target: target, Geo: data})
+	a.emit(EventTargetGeo, TargetGeoEvent{Target: target, Geo: data})
 }

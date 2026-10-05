@@ -161,6 +161,25 @@ func TestDeduplicatesAcrossSources(t *testing.T) {
 	}
 }
 
+func TestSourcePrecedenceIsOrderIndependent(t *testing.T) {
+	first := newCollector(10)
+	first.add("mail.example.com", "ptr", []string{"2.2.2.2"})
+	first.add("mail.example.com", "srv", nil)
+	first.add("mail.example.com", "brute", []string{"2.2.2.2"})
+
+	second := newCollector(10)
+	second.add("mail.example.com", "brute", []string{"2.2.2.2"})
+	second.add("mail.example.com", "ptr", []string{"2.2.2.2"})
+	second.add("mail.example.com", "srv", nil)
+
+	for _, c := range []*collector{first, second} {
+		results := c.results()
+		if len(results) != 1 || results[0].Source != "brute" {
+			t.Fatalf("source = %+v, want brute regardless of add order", results)
+		}
+	}
+}
+
 func TestMaxResultsCap(t *testing.T) {
 	resolver := fakeResolver{ips: map[string][]net.IP{
 		"a.example.com": {net.ParseIP("1.1.1.1")},

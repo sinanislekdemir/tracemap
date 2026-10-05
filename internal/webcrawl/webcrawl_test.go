@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeResolver returns canned IPs for hostnames.
@@ -425,4 +426,60 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestSitemapsFetchedConcurrently(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		current int
+		maxSeen int
+	)
+	sitemap := func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		current++
+		if current > maxSeen {
+			maxSeen = current
+		}
+		mu.Unlock()
+
+		time.Sleep(30 * time.Millisecond)
+
+		mu.Lock()
+		current--
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0"?><urlset><url><loc>http://example.test/p</loc></url></urlset>`)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "User-agent: *\n"+
+			"Sitemap: http://example.test/s1.xml\n"+
+			"Sitemap: http://example.test/s2.xml\n"+
+			"Sitemap: http://example.test/s3.xml\n"+
+			"Sitemap: http://example.test/s4.xml\n")
+	})
+	mux.HandleFunc("/s1.xml", sitemap)
+	mux.HandleFunc("/s2.xml", sitemap)
+	mux.HandleFunc("/s3.xml", sitemap)
+	mux.HandleFunc("/s4.xml", sitemap)
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><title>Home</title></html>`)
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	Crawl(context.Background(), "example.test", Options{
+		BaseURL:  "http://example.test/",
+		Client:   &http.Client{Transport: dialTransport(server.Listener.Addr().String())},
+		Resolver: fakeResolver{},
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if maxSeen < 2 {
+		t.Fatalf("sitemaps were fetched serially (max concurrency %d), want parallel", maxSeen)
+	}
 }

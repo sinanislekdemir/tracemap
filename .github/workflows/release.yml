@@ -17,23 +17,23 @@ jobs:
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Pinned, not *-latest: the binary links against the runner's Qt6, and
+          # the .deb/.rpm declare that Qt ABI as a minimum. Moving the runner
+          # changes the required Qt symbols, so the baseline is explicit and the
+          # "Verify Linux Qt baseline" step fails if it drifts.
           - name: linux-amd64
-            os: ubuntu-latest
-            build: wails build -tags webkit2_41
-            package: tar -czf "tracemap-${GITHUB_REF_NAME}-linux-amd64.tar.gz" -C build/bin traceroute
-          - name: darwin-universal
-            os: macos-latest
-            build: wails build -platform darwin/universal
-            package: ditto -c -k --keepParent build/bin/traceroute.app "tracemap-${GITHUB_REF_NAME}-darwin-universal.zip"
-          - name: windows-amd64
-            os: windows-latest
-            build: wails build
-            package: powershell -NoProfile -Command "Compress-Archive -Path ./build/bin/traceroute.exe -DestinationPath 'tracemap-${GITHUB_REF_NAME}-windows-amd64.zip' -Force"
+            os: ubuntu-24.04
+          - name: darwin-arm64
+            os: macos-14
+    env:
+      # Minimum Qt6 the released Linux binaries are built against (Ubuntu 24.04).
+      # Keep in sync with nfpm.yaml's Depends and the macOS deployment target.
+      QT_BASELINE: "6.4"
 
     steps:
       - name: Checkout
@@ -45,37 +45,43 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install Linux build dependencies
+      - name: Install Qt6 (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y qt6-base-dev g++ binutils
 
-      - name: Install Wails CLI
-        shell: bash
+      - name: Install Qt6 (macOS)
+        if: runner.os == 'macOS'
         run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@latest
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          brew install qt
+          echo "PKG_CONFIG_PATH=$(brew --prefix qt)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "$(brew --prefix qt)/bin" >> "$GITHUB_PATH"
 
       - name: Build
-        shell: bash
-        run: ${{ matrix.build }}
+        run: make build
 
-      - name: Package
-        shell: bash
-        run: ${{ matrix.package }}
-
-      - name: Build Linux packages (deb, rpm)
+      - name: Verify Linux Qt baseline
         if: runner.os == 'Linux'
-        shell: bash
         run: |
+          set -euo pipefail
+          required="$(readelf --version-info build/bin/traceroute \
+            | grep -oE 'Qt_6\.[0-9]+' | sort -uV | tail -n1 || true)"
+          echo "Binary requires ${required:-<none>}; declared baseline is Qt_${QT_BASELINE}"
+          if [ -z "$required" ]; then
+            echo "::error::could not determine the binary's Qt requirement"
+            exit 1
+          fi
+          newest="$(printf '%s\n%s\n' "${required#Qt_}" "$QT_BASELINE" | sort -V | tail -n1)"
+          if [ "$newest" != "$QT_BASELINE" ]; then
+            echo "::error::binary requires ${required}, newer than the declared baseline Qt_${QT_BASELINE}; bump QT_BASELINE and nfpm.yaml together."
+            exit 1
+          fi
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          tar -czf "tracemap-${GITHUB_REF_NAME}-linux-amd64.tar.gz" -C build/bin traceroute
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
           export PATH="$PATH:$(go env GOPATH)/bin"
           VERSION="${GITHUB_REF_NAME#v}"
@@ -83,6 +89,35 @@ jobs:
           export VERSION
           nfpm package --config nfpm.yaml --packager deb --target "tracemap-${GITHUB_REF_NAME}-linux-amd64.deb"
           nfpm package --config nfpm.yaml --packager rpm --target "tracemap-${GITHUB_REF_NAME}-linux-amd64.rpm"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          APP="build/bin/tracemap.app"
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp build/bin/traceroute "$APP/Contents/MacOS/tracemap"
+          cp build/appicon.png "$APP/Contents/Resources/appicon.png"
+          cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>tracemap</string>
+            <key>CFBundleDisplayName</key><string>Traceroute Map</string>
+            <key>CFBundleIdentifier</key><string>com.islekdemir.tracemap</string>
+            <key>CFBundleExecutable</key><string>tracemap</string>
+            <key>CFBundleIconFile</key><string>appicon.png</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>1.0.0</string>
+            <key>LSMinimumSystemVersion</key><string>12.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          macdeployqt "$APP" -always-overwrite
+          ditto -c -k --keepParent "$APP" "tracemap-${GITHUB_REF_NAME}-darwin-arm64.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -121,10 +156,6 @@ jobs:
               --verify-tag
           fi
 
-      # Upload assets one at a time with backoff and a per-attempt timeout.
-      # The previous parallel uploader failed the whole job when a single asset
-      # hit a transient API error, and uploads occasionally stall for minutes;
-      # the timeout forces a fresh attempt instead of hanging indefinitely.
       - name: Upload assets
         run: |
           set -uo pipefail

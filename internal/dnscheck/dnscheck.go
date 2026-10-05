@@ -7,11 +7,20 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
 
 	"traceroute/internal/netutil"
+)
+
+// Bounded fan-out for the DNS lookups that make up a scan. A scan resolves the
+// apex, every expanded nameserver, and the mail/NS/SOA hosts; doing those
+// lookups concurrently turns a long chain of round-trips into a few.
+const (
+	expandConcurrency = 8
+	targetConcurrency = 8
 )
 
 // Record is a single DNS answer.
@@ -194,47 +203,84 @@ func LookupAll(ctx context.Context, resolver Resolver, domain string) []Record {
 }
 
 // Lookup gathers A, AAAA, CNAME, MX and NS records for domain. Individual
-// record failures are ignored so a partial result is still useful.
+// record failures are ignored so a partial result is still useful. The five
+// lookups are independent, so they run concurrently and are merged in a stable
+// order (A/AAAA, CNAME, MX, NS).
 func Lookup(ctx context.Context, resolver Resolver, domain string) []Record {
+	queries := []func() []Record{
+		func() []Record {
+			var out []Record
+			ips, err := resolver.LookupIP(ctx, "ip", domain)
+			if err != nil {
+				return nil
+			}
+			for _, ip := range ips {
+				if v4 := ip.To4(); v4 != nil {
+					out = append(out, Record{Type: "A", Name: domain, Value: v4.String()})
+				} else {
+					out = append(out, Record{Type: "AAAA", Name: domain, Value: ip.String()})
+				}
+			}
+			return out
+		},
+		func() []Record {
+			cname, err := resolver.LookupCNAME(ctx, domain)
+			if err != nil {
+				return nil
+			}
+			canonical := strings.TrimSuffix(cname, ".")
+			if canonical == "" || strings.EqualFold(canonical, domain) {
+				return nil
+			}
+			return []Record{{Type: "CNAME", Name: domain, Value: canonical}}
+		},
+		func() []Record {
+			mxs, err := resolver.LookupMX(ctx, domain)
+			if err != nil {
+				return nil
+			}
+			out := make([]Record, 0, len(mxs))
+			for _, mx := range mxs {
+				out = append(out, Record{Type: "MX", Name: domain, Value: strings.TrimSuffix(mx.Host, "."), Priority: int(mx.Pref)})
+			}
+			return out
+		},
+		func() []Record {
+			nss, err := resolver.LookupNS(ctx, domain)
+			if err != nil {
+				return nil
+			}
+			out := make([]Record, 0, len(nss))
+			for _, ns := range nss {
+				out = append(out, Record{Type: "NS", Name: domain, Value: strings.TrimSuffix(ns.Host, ".")})
+			}
+			return out
+		},
+	}
+
+	groups := make([][]Record, len(queries))
+	var wg sync.WaitGroup
+	for i := range queries {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			groups[i] = queries[i]()
+		}(i)
+	}
+	wg.Wait()
+
 	records := make([]Record, 0, 8)
 	seen := make(map[string]bool)
-	add := func(record Record) {
-		key := record.Type + "|" + record.Value
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		records = append(records, record)
-	}
-
-	if ips, err := resolver.LookupIP(ctx, "ip", domain); err == nil {
-		for _, ip := range ips {
-			if v4 := ip.To4(); v4 != nil {
-				add(Record{Type: "A", Name: domain, Value: v4.String()})
-			} else {
-				add(Record{Type: "AAAA", Name: domain, Value: ip.String()})
+	for _, group := range groups {
+		for _, record := range group {
+			key := record.Type + "|" + record.Value
+			if seen[key] {
+				continue
 			}
+			seen[key] = true
+			records = append(records, record)
 		}
 	}
-
-	if cname, err := resolver.LookupCNAME(ctx, domain); err == nil {
-		if canonical := strings.TrimSuffix(cname, "."); !strings.EqualFold(canonical, domain) {
-			add(Record{Type: "CNAME", Name: domain, Value: canonical})
-		}
-	}
-
-	if mxs, err := resolver.LookupMX(ctx, domain); err == nil {
-		for _, mx := range mxs {
-			add(Record{Type: "MX", Name: domain, Value: strings.TrimSuffix(mx.Host, "."), Priority: int(mx.Pref)})
-		}
-	}
-
-	if nss, err := resolver.LookupNS(ctx, domain); err == nil {
-		for _, ns := range nss {
-			add(Record{Type: "NS", Name: domain, Value: strings.TrimSuffix(ns.Host, ".")})
-		}
-	}
-
 	return records
 }
 
@@ -269,7 +315,9 @@ func Expand(ctx context.Context, resolver Resolver, domain string, records []Rec
 	queue := nsHosts(records)
 	expanded := 0
 	for depth := 0; depth < maxDepth && len(queue) > 0; depth++ {
-		next := make([]string, 0, len(queue))
+		// Claim the hosts for this level in order so the merged output stays
+		// deterministic, then resolve the whole level concurrently.
+		hosts := make([]string, 0, len(queue))
 		for _, host := range queue {
 			if host == "" || seenHost[host] {
 				continue
@@ -279,8 +327,25 @@ func Expand(ctx context.Context, resolver Resolver, domain string, records []Rec
 			}
 			seenHost[host] = true
 			expanded++
+			hosts = append(hosts, host)
+		}
 
-			sub := Lookup(ctx, resolver, host)
+		lookups := make([][]Record, len(hosts))
+		sem := make(chan struct{}, expandConcurrency)
+		var wg sync.WaitGroup
+		for i, host := range hosts {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int, host string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				lookups[i] = Lookup(ctx, resolver, host)
+			}(i, host)
+		}
+		wg.Wait()
+
+		next := make([]string, 0, len(hosts))
+		for _, sub := range lookups {
 			for _, record := range sub {
 				add(record)
 			}
@@ -374,29 +439,48 @@ func AllTargets(ctx context.Context, resolver Resolver, domain string, records [
 			add(record.Type, label, record.Value)
 		}
 	}
-	resolve := func(kind, host string) {
-		ips, err := resolver.LookupIP(ctx, "ip", host)
-		if err != nil {
-			return
-		}
-		for _, ip := range ips {
-			add(kind, host, ip.String())
-		}
-	}
+	// Collect the MX/NS/SOA hostnames in record order, resolve them
+	// concurrently, then fold the addresses back in that order so target ids
+	// stay stable.
+	type hostJob struct{ kind, host string }
+	var jobs []hostJob
 	for _, record := range records {
 		switch record.Type {
 		case "MX":
-			resolve(record.Type, record.Value)
+			jobs = append(jobs, hostJob{record.Type, record.Value})
 		case "NS":
 			if host, ok := recordHost(record); ok {
-				resolve(record.Type, host)
+				jobs = append(jobs, hostJob{record.Type, host})
 			}
 		case "SOA":
 			// Both the primary nameserver (MNAME) and the responsible mailbox
 			// (RNAME) are candidate targets.
 			for _, host := range soaHosts(record.Value) {
-				resolve(record.Type, host)
+				jobs = append(jobs, hostJob{record.Type, host})
 			}
+		}
+	}
+
+	resolved := make([][]net.IP, len(jobs))
+	sem := make(chan struct{}, targetConcurrency)
+	var wg sync.WaitGroup
+	for i, job := range jobs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, host string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ips, err := resolver.LookupIP(ctx, "ip", host)
+			if err != nil {
+				return
+			}
+			resolved[i] = ips
+		}(i, job.host)
+	}
+	wg.Wait()
+	for i, job := range jobs {
+		for _, ip := range resolved[i] {
+			add(job.kind, job.host, ip.String())
 		}
 	}
 

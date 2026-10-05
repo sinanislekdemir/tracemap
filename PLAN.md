@@ -42,15 +42,15 @@ offline world map (local vector borders + major cities).
 Raw ICMP sockets cannot be opened from the webview, and the app is meant to
 measure the **user's own** network path. The Go backend therefore runs the system
 `traceroute`/`tracert` binary locally and streams parsed hops to the UI. No HTTP
-server or WebSocket is involved: the Go backend is linked into the app and
-exposed to the frontend through Wails bindings and events.
+server or WebSocket is involved: the Go backend is linked into the app and the
+Qt UI calls its methods directly, receiving typed events through an `EventSink`.
 
 ## 3. Architecture
 
 ```
-Wails window (React + Leaflet map UI)
-   │  Bind: Trace(req), Scan(req), ScanPorts(req), Cancel()
-   │  Events: trace:hop, trace:geo, trace:done, trace:error, portscan:open, …
+Qt6 window (native widgets + hand-painted offline vector map)
+   │  Call: Trace(req), Scan(req), ScanPorts(req), Cancel(), …
+   │  Events (typed Go values): trace:hop, trace:geo, trace:done, portscan:open, …
    ▼
 Go backend (in-process)
    ├── tracerouter  (spawn system traceroute/tracert, parse output)
@@ -59,6 +59,8 @@ Go backend (in-process)
    ├── subdomains   (local discovery: brute force, PTR, SPF/DMARC, SRV)
    ├── webcrawl     (browser-UA HTTP crawl: frontpage + 1 level, robots, sitemap)
    ├── portscan     (TCP connect / UDP scan; banner/HTTP/TLS probing)
+   ├── mapdata      (embedded Natural Earth basemap + Web Mercator)
+   ├── mapview      (QPainter map widget: layers, pan/zoom, hit-testing)
    └── history      (saved traces/scans; SQLite snapshot store)
 ```
 

@@ -156,8 +156,8 @@ jobs:
           context: win
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/tracemap-win-build:latest
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/tracemap-win-build:latest
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/tracemap-win-build:latest,mode=max
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/tracemap-win-build:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/tracemap-win-build:buildcache,mode=max
 
       - name: Build Windows exe
         run: |

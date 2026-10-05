@@ -135,16 +135,18 @@ Prebuilt binaries are attached to each tagged release:
 | --- | --- | --- |
 | Linux | x86_64 | `tracemap-<version>-linux-amd64.tar.gz`, `.deb`, `.rpm` |
 | macOS | Apple Silicon (arm64) | `tracemap-<version>-darwin-arm64.zip` |
-
-> Windows packaging is not part of the current build; the Go backend already
-> handles Windows paths, so it can be added as a follow-up.
+| Windows | x86_64 | `tracemap-<version>-windows-amd64.zip` |
 
 The `.deb` and `.rpm` packages install the binary as `tracemap` (to `/usr/bin`),
-a desktop entry and an icon.
+a desktop entry and an icon. The Windows zip holds a single self-contained
+`tracemap.exe`: it is cross-compiled with MinGW-w64 and a statically linked Qt6,
+so there are no Qt DLLs to ship, and built with `-H windowsgui` so it opens
+without a console.
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds each
-target on its native runner and publishes a GitHub release. Qt/cgo applications
-cannot be trivially cross-compiled, so every platform is built on its own runner.
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which publishes a
+GitHub release. Linux and macOS are built on their native runners against the
+system Qt; Windows is cross-compiled on a Linux runner with the cached
+MinGW-w64 + static Qt6 image in `win/`, so no Windows runner is required.
 CI (`.github/workflows/ci.yml`) runs `make check` on every push and pull request.
 
 ## How it works

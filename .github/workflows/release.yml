@@ -126,9 +126,61 @@ jobs:
           path: tracemap-*
           if-no-files-found: error
 
+  # Windows is cross-compiled from Linux (no Windows runner) with a cached
+  # MinGW-w64 + statically linked Qt6 container, mirroring recovery-qt's win/
+  # setup. The result is one self-contained tracemap.exe with no DLLs to ship.
+  build-windows:
+    name: Build windows-amd64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build cross-compile image
+        uses: docker/build-push-action@v6
+        with:
+          context: win
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/tracemap-win-build:latest
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/tracemap-win-build:latest
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/tracemap-win-build:latest,mode=max
+
+      - name: Build Windows exe
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" \
+            -w /src \
+            ghcr.io/${{ github.repository_owner }}/tracemap-win-build:latest \
+            bash win/docker-build.sh
+
+      - name: Package Windows zip
+        run: |
+          zip -j "tracemap-${GITHUB_REF_NAME}-windows-amd64.zip" build-win/tracemap.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-amd64
+          path: tracemap-*
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: build
+    needs: [build, build-windows]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 30

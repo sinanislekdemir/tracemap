@@ -30,7 +30,8 @@ Always run `make check` after changes. Never commit unless asked.
 ## Versioning
 
 Releases are tagged `vMAJOR.MINOR.PATCH`; pushing a tag triggers the release
-workflow that packs the `.deb`/`.rpm`/`.tar.gz`.
+workflow that packs the `.deb`/`.rpm`/`.tar.gz` (Linux), the macOS `.app` zip and
+the Windows zip.
 
 - **Always increase the PATCH version first** (e.g. `v0.2.0` → `v0.2.1`).
 - Bump the MINOR version only when the PATCH would exceed 9: after `v0.2.9` the
@@ -79,7 +80,11 @@ internal/ratelimit/         shared context-aware rate limiter
 build/                      appicon.png + Linux desktop file
 .github/workflows/          CI (make check) + tag-triggered release builds
                             (release.yml pins ubuntu-24.04/macos-14 and guards the
-                            Qt6 baseline — see QT_BASELINE and nfpm.yaml)
+                            Qt6 baseline — see QT_BASELINE and nfpm.yaml; Windows
+                            is cross-compiled from Linux via the cached image in
+                            win/ — no Windows runner)
+win/                        MinGW-w64 + static Qt6 cross-compile image for the
+                            Windows build (Dockerfile, pkgconfig/, build.sh)
 PLAN.md                     design/architecture document
 ```
 

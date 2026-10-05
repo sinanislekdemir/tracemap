@@ -1,4 +1,6 @@
 build/bin
+build-win
+win/.cache
 /traceroute
 geo-cache.db
 history.db

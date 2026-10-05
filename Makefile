@@ -11,6 +11,13 @@ APP := traceroute
 BIN := build/bin/$(APP)
 GO  := go
 
+# Apple Clang defaults to gnu++98, but Qt6's headers (and the miqt bindings)
+# require C++17. GCC and clang elsewhere already default to C++17, so this is
+# only needed on macOS.
+ifeq ($(shell uname -s),Darwin)
+export CGO_CXXFLAGS := -O2 -g -std=c++17
+endif
+
 ## help: show this help
 .PHONY: help
 help:

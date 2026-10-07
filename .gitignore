@@ -9,3 +9,6 @@ tracemap.db
 *.rpm
 *.tar.gz
 *.zip
+AppDir
+*.AppImage
+*.AppImage.zsync

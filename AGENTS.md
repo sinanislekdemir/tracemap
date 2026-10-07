@@ -52,7 +52,7 @@ cancel.go                   shared cancellable-operation primitive
 emit.go                     EventSink + Dialogs interfaces (toolkit-agnostic)
 ui_app.go                   uiApp controller: main window, toolbar, sidebar, status bar, event dispatch, map model
 ui_model.go                 UI state types, trace colours, correlation, route/bezier building
-ui_logwindow.go             floating per-channel log windows (console/dns/subdomains/crawl/trace/ports/origin)
+ui_logwindow.go             docked per-channel log panes (console/dns/subdomains/crawl/trace/ports/origin/netcat)
 ui_dialogs.go               native Qt Dialogs (QFileDialog/QMessageBox) for the backend
 ui_scan.go                  advanced-scan options window
 ui_port.go                  port-scan window (options + results table + activity)
@@ -78,9 +78,11 @@ internal/httputil/          shared browser User-Agent
 internal/sqliteutil/        shared SQLite open/pragmas/schema helper
 internal/ratelimit/         shared context-aware rate limiter
 build/                      appicon.png + Linux desktop file
+scripts/                    build-appimage.sh (portable AppImage via linuxdeploy)
 .github/workflows/          CI (make check) + tag-triggered release builds
                             (release.yml pins ubuntu-24.04/macos-14 and guards the
-                            Qt6 baseline — see QT_BASELINE and nfpm.yaml; Windows
+                            Qt6 baseline — see QT_BASELINE and nfpm.yaml; the
+                            AppImage is built in a Debian 12 container; Windows
                             is cross-compiled from Linux via the cached image in
                             win/ — no Windows runner)
 win/                        MinGW-w64 + static Qt6 cross-compile image for the

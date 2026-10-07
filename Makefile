@@ -58,6 +58,11 @@ build:
 run: build
 	$(BIN)
 
+## appimage: build a portable AppImage (needs linuxdeploy; see scripts/build-appimage.sh)
+.PHONY: appimage
+appimage:
+	bash scripts/build-appimage.sh
+
 ## dev: run the app directly from source
 .PHONY: dev
 dev:

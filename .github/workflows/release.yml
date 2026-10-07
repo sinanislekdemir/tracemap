@@ -178,9 +178,58 @@ jobs:
           path: tracemap-*
           if-no-files-found: error
 
+  # A portable single-file AppImage. Built inside Debian 12 rather than the
+  # Ubuntu 24.04 runner: Debian 12 ships Qt 6.4 (the miqt baseline) on an older
+  # glibc (2.36 vs 2.39), so the bundled binary runs on more distributions.
+  # Mirrors scripts/build-appimage.sh (the same linuxdeploy recipe as poorman).
+  appimage:
+    name: Build linux-x86_64 AppImage
+    runs-on: ubuntu-24.04
+    container: debian:12
+    timeout-minutes: 45
+    steps:
+      # The debian:12 image ships no git, and actions/checkout needs it.
+      - name: Install checkout prerequisites
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build AppImage
+        env:
+          INSTALL_DEPS: "1"
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          chmod +x scripts/build-appimage.sh
+          if [[ "$GITHUB_REF" =~ ^refs/tags/ ]]; then
+            export VERSION="${GITHUB_REF_NAME}"
+          else
+            export VERSION="0.0.0"
+          fi
+          ./scripts/build-appimage.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tracemap-appimage-linux-x86_64
+          path: |
+            tracemap-*-x86_64.AppImage
+            tracemap-*-x86_64.AppImage.zsync
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: [build, build-windows]
+    needs: [build, build-windows, appimage]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 30

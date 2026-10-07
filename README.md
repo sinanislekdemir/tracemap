@@ -131,20 +131,25 @@ Prebuilt binaries are attached to each tagged release:
 
 | OS | Architecture | Artifact |
 | --- | --- | --- |
-| Linux | x86_64 | `tracemap-<version>-linux-amd64.tar.gz`, `.deb`, `.rpm` |
+| Linux | x86_64 | `tracemap-<version>-x86_64.AppImage`, `tracemap-<version>-linux-amd64.tar.gz`, `.deb`, `.rpm` |
 | macOS | Apple Silicon (arm64) | `tracemap-<version>-darwin-arm64.zip` |
 | Windows | x86_64 | `tracemap-<version>-windows-amd64.zip` |
 
 The `.deb` and `.rpm` packages install the binary as `tracemap` (to `/usr/bin`),
-a desktop entry and an icon. The Windows zip holds a single self-contained
-`tracemap.exe`: it is cross-compiled with MinGW-w64 and a statically linked Qt6,
-so there are no Qt DLLs to ship, and built with `-H windowsgui` so it opens
-without a console.
+a desktop entry and an icon. The AppImage is a single self-contained file that
+bundles Qt6 — `chmod +x` it and run, no packages needed. It is built on Debian 12
+so it only needs glibc 2.36, and it embeds `gh-releases-zsync` update information
+with a matching `.zsync`, so AppImageUpdate can fetch later releases. The Windows
+zip holds a single self-contained `tracemap.exe`: it is cross-compiled with
+MinGW-w64 and a statically linked Qt6, so there are no Qt DLLs to ship, and built
+with `-H windowsgui` so it opens without a console.
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which publishes a
 GitHub release. Linux and macOS are built on their native runners against the
-system Qt; Windows is cross-compiled on a Linux runner with the cached
-MinGW-w64 + static Qt6 image in `win/`, so no Windows runner is required.
+system Qt, and the AppImage is packaged in a Debian 12 container
+(`scripts/build-appimage.sh`); Windows is cross-compiled on a Linux runner with
+the cached MinGW-w64 + static Qt6 image in `win/`, so no Windows runner is
+required.
 CI (`.github/workflows/ci.yml`) runs `make check` on every push and pull request.
 
 ## How it works

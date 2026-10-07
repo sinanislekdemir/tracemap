@@ -350,10 +350,15 @@ PLAN.md                     design/architecture document
 - **Web-Mercator, our own transform.** `mapdata.Mercator` returns normalized
   [0,1] coordinates; the widget scales by `TileSize * 2^zoom`. Land/country
   `QPainterPath`s are built once at startup and reused across zoom and theme.
-- **One main window.** Toolbar row (target box + PORTS badge, Trace/Scan/Ports/
-  Cancel, Tools menu, Windows menu, Correlate, theme toggle) -> `QSplitter`
-  (sidebar tabs: Hops / Traces / Subdomains / Correlation | map) -> `QStatusBar`.
-  Panes scroll internally; the window itself does not.
+  The static basemap (sea, land, borders, city labels) is additionally cached in
+  a pixmap keyed on size/zoom/centre/theme, so the motion ticker repaints only
+  the overlay; it runs only while animation is on and at least one route exists,
+  so an idle map never burns CPU.
+- **One main window, one menu bar.** The toolbar keeps the target box + PORTS
+  badge, MAX HOPS, Trace/Scan/Ports/Cancel and Clean; the File/View/Tools/Windows
+  menu bar holds history, correlate/motion, theme, the tools and the window list.
+  Below it a `QSplitter` (sidebar tabs: Hops / Traces / Subdomains / Correlation
+  | map) -> `QStatusBar`. Panes scroll internally; the window itself does not.
 - **Log channels are dock widgets; tool windows are transient.** Each console/log
   channel (`console`, `trace`, `dns`, `subdomains`, `crawl`, `ports`, `origin`,
   `netcat`) is a `QDockWidget` holding a `QPlainTextEdit`, created lazily via

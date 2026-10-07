@@ -125,6 +125,18 @@ type MapView struct {
 
 	fitOnce bool
 
+	// Cached static basemap (sea, land, borders, city labels). It is rasterized
+	// only when the view or theme changes, so the motion animation repaints just
+	// the overlay instead of the whole world.
+	base      *qt.QPixmap
+	baseW     int
+	baseH     int
+	baseDPR   float64
+	baseZoom  float64
+	baseCX    float64
+	baseCY    float64
+	baseTheme Theme
+
 	motion      bool
 	phase       float64
 	motionTimer *qt.QTimer
@@ -174,13 +186,7 @@ func (m *MapView) SetTheme(t Theme) {
 // SetMotion turns the travelling route-marker animation on or off.
 func (m *MapView) SetMotion(on bool) {
 	m.motion = on
-	if m.motionTimer != nil {
-		if on {
-			m.motionTimer.Start(50)
-		} else {
-			m.motionTimer.Stop()
-		}
-	}
+	m.syncMotion()
 	m.Update()
 }
 
@@ -191,7 +197,24 @@ func (m *MapView) SetModel(model Model) {
 		m.FitModel()
 		m.fitOnce = true
 	}
+	m.syncMotion()
 	m.Update()
+}
+
+// syncMotion runs the animation ticker only while motion is enabled and at least
+// one route exists to animate. Without this an idle map would repaint on a timer
+// forever and pin a CPU core.
+func (m *MapView) syncMotion() {
+	if m.motionTimer == nil {
+		return
+	}
+	if m.motion && len(m.model.Routes) > 0 {
+		if !m.motionTimer.IsActive() {
+			m.motionTimer.Start(50)
+		}
+		return
+	}
+	m.motionTimer.Stop()
 }
 
 // OnSelect installs the marker click handler; gx/gy are global pixels.
@@ -299,38 +322,28 @@ func col(hex string) *qt.QColor {
 }
 
 func (m *MapView) paint() {
+	w := m.Width()
+	h := m.Height()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	m.ensureBase(w, h)
+
 	p := qt.NewQPainter2(m.QPaintDevice)
 	defer p.Delete()
 	p.SetRenderHint(qt.QPainter__Antialiasing)
 
-	w := float64(m.Width())
-	h := float64(m.Height())
+	// The static basemap is blitted; only the overlay is redrawn each frame.
+	p.DrawPixmap9(0, 0, m.base)
 
-	p.SetBrush(qt.NewQBrush3(col(m.theme.Sea)))
-	p.SetPenWithStyle(qt.NoPen)
-	p.DrawRect2(0, 0, int(w), int(h))
-
+	fw, fh := float64(w), float64(h)
 	k := m.scale()
 
-	// Basemap and routes share the scene transform.
+	// Routes share the scene transform with the cached basemap.
 	p.Save()
-	p.Translate(qt.NewQPointF3(w/2, h/2))
+	p.Translate(qt.NewQPointF3(fw/2, fh/2))
 	p.Scale(k, k)
 	p.Translate(qt.NewQPointF3(-m.centerX, -m.centerY))
-
-	p.FillPath(m.landPath, qt.NewQBrush3(col(m.theme.Land)))
-	coast := qt.NewQPen3(col(m.theme.Coast))
-	coast.SetCosmetic(true)
-	coast.SetWidthF(0.8)
-	p.SetPenWithPen(coast)
-	p.SetBrush(qt.NewQBrush2(qt.NoBrush))
-	p.DrawPath(m.landPath)
-
-	border := qt.NewQPen3(col(m.theme.Border))
-	border.SetCosmetic(true)
-	border.SetWidthF(0.5)
-	p.SetPenWithPen(border)
-	p.DrawPath(m.borders)
 
 	for _, r := range m.model.Routes {
 		if len(r.Points) < 2 {
@@ -357,21 +370,80 @@ func (m *MapView) paint() {
 	p.SetOpacity(1)
 	p.Restore()
 
-	// Overlay: markers, city labels, origins, HUD (screen space).
+	// Overlay: markers, origins, motion and HUD (screen space).
 	m.hits = m.hits[:0]
-	m.drawCities(p)
 	for _, mk := range m.model.Markers {
-		m.drawMarker(p, mk, w, h)
+		m.drawMarker(p, mk, fw, fh)
 	}
 	for _, o := range m.model.Origins {
-		m.drawOrigin(p, o, w, h)
+		m.drawOrigin(p, o, fw, fh)
 	}
 	if m.motion {
-		m.drawMotion(p, w, h)
+		m.drawMotion(p, fw, fh)
 	}
 	m.drawLegend(p)
 	m.drawScaleBar(p)
 	m.drawHUD(p)
+}
+
+// ensureBase rasterizes the static basemap — sea, land, borders and city labels
+// — into a cached pixmap. It is rebuilt only when the widget size, the view
+// (zoom/centre) or the theme changes, so the 20 fps motion animation only has to
+// blit the cache and draw the overlay.
+func (m *MapView) ensureBase(w, h int) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	dpr := m.DevicePixelRatioF()
+	if dpr <= 0 {
+		dpr = 1
+	}
+	if m.base != nil && m.baseW == w && m.baseH == h && m.baseDPR == dpr &&
+		m.baseZoom == m.zoom && m.baseCX == m.centerX && m.baseCY == m.centerY &&
+		m.baseTheme == m.theme {
+		return
+	}
+	if m.base == nil || m.baseW != w || m.baseH != h || m.baseDPR != dpr {
+		if m.base != nil {
+			m.base.Delete()
+		}
+		m.base = qt.NewQPixmap2(int(float64(w)*dpr), int(float64(h)*dpr))
+		m.base.SetDevicePixelRatio(dpr)
+	}
+	m.baseW, m.baseH, m.baseDPR = w, h, dpr
+	m.baseZoom, m.baseCX, m.baseCY, m.baseTheme = m.zoom, m.centerX, m.centerY, m.theme
+
+	p := qt.NewQPainter2(m.base.QPaintDevice)
+	defer p.Delete()
+	p.SetRenderHint(qt.QPainter__Antialiasing)
+
+	fw, fh := float64(w), float64(h)
+	p.SetBrush(qt.NewQBrush3(col(m.theme.Sea)))
+	p.SetPenWithStyle(qt.NoPen)
+	p.DrawRect2(0, 0, w, h)
+
+	k := m.scale()
+	p.Save()
+	p.Translate(qt.NewQPointF3(fw/2, fh/2))
+	p.Scale(k, k)
+	p.Translate(qt.NewQPointF3(-m.centerX, -m.centerY))
+
+	p.FillPath(m.landPath, qt.NewQBrush3(col(m.theme.Land)))
+	coast := qt.NewQPen3(col(m.theme.Coast))
+	coast.SetCosmetic(true)
+	coast.SetWidthF(0.8)
+	p.SetPenWithPen(coast)
+	p.SetBrush(qt.NewQBrush2(qt.NoBrush))
+	p.DrawPath(m.landPath)
+
+	border := qt.NewQPen3(col(m.theme.Border))
+	border.SetCosmetic(true)
+	border.SetWidthF(0.5)
+	p.SetPenWithPen(border)
+	p.DrawPath(m.borders)
+	p.Restore()
+
+	m.drawCities(p, fw, fh)
 }
 
 func pathFromPoints(points [][2]float64) *qt.QPainterPath {
@@ -383,9 +455,7 @@ func pathFromPoints(points [][2]float64) *qt.QPainterPath {
 	return p
 }
 
-func (m *MapView) drawCities(p *qt.QPainter) {
-	w := float64(m.Width())
-	h := float64(m.Height())
+func (m *MapView) drawCities(p *qt.QPainter, w, h float64) {
 	showMajor := m.zoom >= 3
 	showAll := m.zoom >= 5
 	dot := qt.NewQBrush3(col(m.theme.CityDot))

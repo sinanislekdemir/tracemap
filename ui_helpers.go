@@ -9,19 +9,12 @@ import (
 	"traceroute/internal/portscan"
 )
 
-// newFloatingDialog creates a non-modal tool window flagged to stay above the
-// main window, so the main window can never be raised over it. On compositors
-// that ignore always-on-top (e.g. some Wayland setups) the flag is a no-op.
-func newFloatingDialog() *qt.QDialog {
-	d := qt.NewQDialog2()
-	d.SetWindowFlag(qt.WindowStaysOnTopHint)
-	return d
-}
-
-// keepOnTop flags an existing top-level widget to stay above the main window.
-// It must be called before the widget is first shown.
-func keepOnTop(w *qt.QWidget) {
-	w.SetWindowFlag(qt.WindowStaysOnTopHint)
+// newFloatingDialog creates a non-modal tool window parented to the main
+// window. Parenting turns it into a transient window, which window managers on
+// X11, Wayland and Windows all keep above their owner — the portable
+// replacement for WindowStaysOnTopHint, which Wayland ignores outright.
+func newFloatingDialog(parent *qt.QWidget) *qt.QDialog {
+	return qt.NewQDialog(parent)
 }
 
 // parseBlockTarget mirrors the web frontend's cidr.ts: it recognises an IPv4

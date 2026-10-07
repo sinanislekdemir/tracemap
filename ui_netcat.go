@@ -30,7 +30,7 @@ func (u *uiApp) openNetcat() { u.openNetcatFor("", 0, false) }
 // (used from port-scan results).
 func (u *uiApp) openNetcatFor(host string, port int, tls bool) {
 	d := &netcatWindow{u: u}
-	d.win = newFloatingDialog()
+	d.win = newFloatingDialog(u.win.QWidget)
 	d.win.SetWindowTitle("Netcat")
 	d.win.Resize(640, 460)
 	v := qt.NewQVBoxLayout(d.win.QWidget)

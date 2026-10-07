@@ -31,8 +31,8 @@ func cleanDomain(input string) string {
 	return d
 }
 
-func textDialog(title string, w, h int) (*qt.QDialog, *qt.QTextBrowser) {
-	dlg := newFloatingDialog()
+func textDialog(parent *qt.QWidget, title string, w, h int) (*qt.QDialog, *qt.QTextBrowser) {
+	dlg := newFloatingDialog(parent)
 	dlg.SetWindowTitle(title)
 	dlg.Resize(w, h)
 	v := qt.NewQVBoxLayout(dlg.QWidget)
@@ -149,7 +149,7 @@ func (u *uiApp) openDomainDialog() {
 		return
 	}
 	d := &domainDialog{u: u}
-	d.win = newFloatingDialog()
+	d.win = newFloatingDialog(u.win.QWidget)
 	d.win.SetWindowTitle("Domain analysis · " + domain)
 	d.win.Resize(900, 680)
 	v := qt.NewQVBoxLayout(d.win.QWidget)
@@ -377,7 +377,7 @@ func (u *uiApp) openOriginDialog() {
 		return
 	}
 	d := &originDialog{u: u}
-	d.win = newFloatingDialog()
+	d.win = newFloatingDialog(u.win.QWidget)
 	d.win.SetWindowTitle("Unmask target · " + domain)
 	d.win.Resize(960, 700)
 	v := qt.NewQVBoxLayout(d.win.QWidget)
@@ -663,7 +663,7 @@ func (u *uiApp) openEndpointDialog() {
 		return
 	}
 	d := &endpointDialog{u: u, selected: -1}
-	d.win = newFloatingDialog()
+	d.win = newFloatingDialog(u.win.QWidget)
 	d.win.SetWindowTitle("Endpoint analysis · " + target)
 	d.win.Resize(1000, 720)
 	v := qt.NewQVBoxLayout(d.win.QWidget)
@@ -1106,7 +1106,7 @@ type geocacheDialog struct {
 
 func (u *uiApp) openGeoCacheDialog() {
 	d := &geocacheDialog{u: u}
-	d.win = newFloatingDialog()
+	d.win = newFloatingDialog(u.win.QWidget)
 	d.win.SetWindowTitle("GeoIP cache")
 	d.win.Resize(720, 520)
 	v := qt.NewQVBoxLayout(d.win.QWidget)
@@ -1225,6 +1225,7 @@ func (d *geocacheDialog) deleteIP(ip string) {
 type ipblocksDialog struct {
 	u           *uiApp
 	win         *qt.QDialog
+	info        *qt.QLabel
 	countries   *qt.QTreeWidget
 	blocks      *qt.QPlainTextEdit
 	family      *qt.QComboBox
@@ -1236,15 +1237,16 @@ type ipblocksDialog struct {
 
 func (u *uiApp) openIPBlocksDialog() {
 	d := &ipblocksDialog{u: u, codes: map[string]string{}}
-	d.win = newFloatingDialog()
+	d.win = newFloatingDialog(u.win.QWidget)
 	d.win.SetWindowTitle("Country IP blocks")
 	d.win.Resize(820, 620)
 	v := qt.NewQVBoxLayout(d.win.QWidget)
 
 	info := u.app.IPBlocksInfo()
-	infoLabel := qt.NewQLabel3(fmt.Sprintf("%s · %s · %s", info.Database, info.Build, info.Path))
-	infoLabel.SetSizePolicy2(qt.QSizePolicy__Preferred, qt.QSizePolicy__Fixed)
-	v.AddWidget(infoLabel.QWidget)
+	d.info = qt.NewQLabel3(ipblocksInfoText(info))
+	d.info.SetWordWrap(true)
+	d.info.SetSizePolicy2(qt.QSizePolicy__Preferred, qt.QSizePolicy__Fixed)
+	v.AddWidget(d.info.QWidget)
 
 	// Filters: address family and a CIDR substring, both applied by the backend.
 	controls := qt.NewQWidget2()
@@ -1286,9 +1288,11 @@ func (u *uiApp) openIPBlocksDialog() {
 	row := qt.NewQWidget2()
 	h := qt.NewQHBoxLayout(row)
 	h.SetContentsMargins(0, 0, 0, 0)
-	refresh := newButton("Load countries", func() { d.loadCountries() })
+	refresh := newButton("Load countries", func() { d.loadOrPick() })
+	selectDB := newButton("Select database…", func() { d.pickDatabase() })
 	export := newButton("Export blocks", func() { d.exportBlocks() })
 	h.AddWidget(refresh.QWidget)
+	h.AddWidget(selectDB.QWidget)
 	h.AddWidget(export.QWidget)
 	h.AddStretch()
 	v.AddWidget(row)
@@ -1347,6 +1351,10 @@ func (d *ipblocksDialog) loadCountries() {
 	d.codes = map[string]string{}
 	countries, err := d.u.app.ListCountryBlocks()
 	if err != nil {
+		if !d.u.app.IPBlocksInfo().Available {
+			d.u.status.ShowMessage("no GeoLite2 database loaded — use “Select database…” to choose one")
+			return
+		}
 		d.u.status.ShowMessage(err.Error())
 		return
 	}
@@ -1361,6 +1369,59 @@ func (d *ipblocksDialog) loadCountries() {
 		item.SetText(1, fmt.Sprintf("%d", c.Blocks))
 		item.SetText(2, c.Addresses)
 	}
+}
+
+// loadOrPick loads the country list, first asking for a database file through
+// the native dialog when none is loaded.
+func (d *ipblocksDialog) loadOrPick() {
+	if !d.u.app.IPBlocksInfo().Available && !d.pickDatabase() {
+		return
+	}
+	d.loadCountries()
+}
+
+// pickDatabase asks for a GeoLite2 database through the native file dialog and
+// loads it, reporting whether a database is now available.
+func (d *ipblocksDialog) pickDatabase() bool {
+	path, err := d.u.app.PickCountryDatabase()
+	if err != nil {
+		d.u.status.ShowMessage(err.Error())
+		return false
+	}
+	if strings.TrimSpace(path) == "" {
+		return false // cancelled
+	}
+	info, err := d.u.app.OpenCountryDatabase(path)
+	if err != nil {
+		d.u.status.ShowMessage("GeoLite2 database: " + err.Error())
+		return false
+	}
+	d.setInfo(info)
+	return info.Available
+}
+
+// setInfo refreshes the database description label.
+func (d *ipblocksDialog) setInfo(info IPBlocksInfo) {
+	if d.info != nil {
+		d.info.SetText(ipblocksInfoText(info))
+	}
+}
+
+// ipblocksInfoText renders the loaded database description, or a hint to load
+// one.
+func ipblocksInfoText(info IPBlocksInfo) string {
+	if !info.Available {
+		return "No GeoLite2 database loaded — use “Select database…” to choose a Country or City .mmdb file."
+	}
+	build := info.Build
+	if build == "" {
+		build = "unknown build"
+	}
+	db := info.Database
+	if db == "" {
+		db = "GeoLite2"
+	}
+	return fmt.Sprintf("%s · %s · %s", db, build, info.Path)
 }
 
 // sortBlocksByNumber orders CIDR blocks by their numeric network address

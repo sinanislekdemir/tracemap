@@ -258,8 +258,10 @@ minutes; later builds are incremental.
 9. Press **+ History** to save the current view, and **History** to browse,
    load, correlate, delete or clear saved entries.
 10. **Tools ▾** also opens the **GeoIP cache** (filter, delete single entries or
-    clear all), the **Country IP blocks** browser (family and CIDR filters, plus
-    export of a country's matching CIDR list), and **Endpoint analysis**
+    clear all), the **Country IP blocks** browser (family and CIDR filters, a
+    **Select database…** button to point at a GeoLite2 `.mmdb` file when none is
+    auto-detected, plus export of a country's matching CIDR list), and
+    **Endpoint analysis**
     (analyze the entered host plus any discovered subdomains, crawled pages or
     HTTP port services in bulk).
 
@@ -283,11 +285,13 @@ even if the trace never reaches it.
 
 ## Configuration
 
-All configuration is via environment variables.
+Configuration is via environment variables, plus a couple of per-user files noted
+below (the remembered GeoLite2 path).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TRACEROUTE_DB` | `tracemap.db` | SQLite database holding the geo cache and history; `off` disables persistence. |
+| `TRACEROUTE_GEOIP_COUNTRY_DB` | auto-detected | Path to `GeoLite2-Country.mmdb` (country IP blocks browser). |
 | `TRACEROUTE_GEOIP_CITY_DB` | auto-detected | Path to `GeoLite2-City.mmdb`. |
 | `TRACEROUTE_GEOIP_ASN_DB` | auto-detected | Path to `GeoLite2-ASN.mmdb`. |
 | `TRACEROUTE_GEOIP_DIR` | `/usr/share/GeoIP` etc. | Directory to search for GeoLite2 databases. |
@@ -302,6 +306,36 @@ The database lives in the per-user config directory:
 Geolocation resolution order: in-memory cache → SQLite cache → `ipwho.is`
 (source of truth, throttled to 2 req/s) → local GeoLite2 `.mmdb` fallback.
 Only remote replies are cached.
+
+### Local GeoIP database (optional)
+
+tracemap works without any local database — geolocation resolves through the
+remote `ipwho.is` service and caches the replies in SQLite. A local MaxMind
+GeoLite2 database is only a fallback for when that service is unreachable, and
+it powers the **Country IP blocks** browser, so providing one is optional.
+
+MaxMind distributes the databases as `.mmdb` files and requires a free account:
+
+- GeoLite2 overview and download instructions:
+  <https://dev.maxmind.com/geoip/geolite2-free-geolocation-data>
+- Sign up for a free account / generate a license key:
+  <https://www.maxmind.com/en/create-account>
+- Download portal (after signing in):
+  <https://www.maxmind.com/en/accounts/current/geoip/downloads>
+
+Download `GeoLite2-Country.mmdb`, `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb`,
+then either drop them into a conventional directory (`/usr/share/GeoIP` and
+similar — point elsewhere with `TRACEROUTE_GEOIP_DIR`) or set the path variables
+in the table above. If tracemap still cannot find the database, open
+**Tools ▾ → Country IP blocks** and click **Select database…** to pick the
+`.mmdb` file with a native file dialog; the chosen path is remembered in
+`~/.traceroute-geolite2` and reused on the next launch.
+
+GeoLite2 data is distributed under MaxMind's
+[GeoLite2 End User License Agreement](https://www.maxmind.com/en/geolite2/eula);
+keep the downloaded databases up to date and include the required attribution
+("This product includes GeoLite Data created by MaxMind, available from
+<https://www.maxmind.com>") if you redistribute them.
 
 ### Unmask rules
 

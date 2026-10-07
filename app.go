@@ -481,7 +481,18 @@ func NewApp() *App {
 	}
 
 	if db, err := ipblocks.Open(); err != nil {
-		log.Printf("ipblocks: unavailable: %v", err)
+		// Fall back to a database the user picked earlier (remembered in a
+		// dotfile in their home directory).
+		if picked := loadGeoLite2Path(); picked != "" {
+			if db, perr := ipblocks.OpenPath(picked); perr != nil {
+				log.Printf("ipblocks: unavailable: %v (picked %s: %v)", err, picked, perr)
+			} else {
+				app.ipb = db
+				log.Printf("ipblocks: %s (remembered)", db.Path())
+			}
+		} else {
+			log.Printf("ipblocks: unavailable: %v", err)
+		}
 	} else {
 		app.ipb = db
 		log.Printf("ipblocks: %s", db.Path())
@@ -1762,6 +1773,70 @@ func (a *App) IPBlocksInfo() IPBlocksInfo {
 		info.Build = meta.BuildTime.Format("2006-01-02")
 	}
 	return info
+}
+
+// PickCountryDatabase opens a native file chooser for a GeoLite2 database and
+// returns the selected path, or "" when the user cancels.
+func (a *App) PickCountryDatabase() (string, error) {
+	return a.dialogs.OpenFile("Select GeoLite2 database (Country or City)", []FileFilter{
+		{DisplayName: "MaxMind GeoLite2 (*.mmdb)", Pattern: "*.mmdb"},
+		{DisplayName: "All files", Pattern: "*"},
+	})
+}
+
+// OpenCountryDatabase opens an explicit GeoLite2 database chosen by the user,
+// replacing any auto-detected one, and remembers the path in a dotfile in the
+// home directory so it is reloaded on the next launch.
+func (a *App) OpenCountryDatabase(path string) (IPBlocksInfo, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return a.IPBlocksInfo(), nil
+	}
+	db, err := ipblocks.OpenPath(path)
+	if err != nil {
+		return IPBlocksInfo{}, err
+	}
+	a.ipbOps.stop()
+	if a.ipb != nil {
+		_ = a.ipb.Close()
+	}
+	a.ipb = db
+	saveGeoLite2Path(path)
+	return a.IPBlocksInfo(), nil
+}
+
+// geoLite2PathFile is the dotfile in the home directory that remembers the
+// user-picked GeoLite2 database path.
+func geoLite2PathFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".traceroute-geolite2")
+}
+
+// loadGeoLite2Path returns the remembered database path, or "" when none is
+// stored or it can no longer be read.
+func loadGeoLite2Path() string {
+	path := geoLite2PathFile()
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// saveGeoLite2Path remembers a picked database path, ignoring write failures
+// (remembering is best-effort).
+func saveGeoLite2Path(dbPath string) {
+	path := geoLite2PathFile()
+	if path == "" {
+		return
+	}
+	_ = os.WriteFile(path, []byte(dbPath+"\n"), 0o644)
 }
 
 // ListCountryBlocks walks the local GeoLite2 database and returns the number of

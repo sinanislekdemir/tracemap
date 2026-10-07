@@ -313,19 +313,24 @@ PLAN.md                     design/architecture document
 - **Country IP blocks** (`internal/ipblocks`): browses the local GeoLite2
   Country/City database by country. `Open` prefers `GeoLite2-Country.mmdb`, then
   `GeoLite2-City.mmdb` (`TRACEROUTE_GEOIP_COUNTRY_DB`/`TRACEROUTE_GEOIP_CITY_DB`
-  override, then `TRACEROUTE_GEOIP_DIR`, then the conventional dirs). A full
+  override, then `TRACEROUTE_GEOIP_DIR`, then the conventional dirs);
+  `OpenPath` opens an explicit file. A full
   `Reader.Networks` walk (~3.6M networks, ~2.5s) yields the per-country summary
   (`Countries`, cached once) and a country's prefixes (`Blocks`, one country
   cached at a time; `ClearCache` frees it). `Paginate` applies the family and
   CIDR-substring filters and an address-space sum; a negative `Limit` keeps
-  every match for exports. Bound methods: `IPBlocksInfo`, `ListCountryBlocks`,
+  every match for exports. Bound methods: `IPBlocksInfo`, `PickCountryDatabase`
+  (native open dialog), `OpenCountryDatabase`, `ListCountryBlocks`,
   `QueryCountryBlocks`, `ReleaseCountryBlocks`, `ExportCountryBlocks` (plain
-  CIDR lines + summary header). The walk streams `ipblocks:progress`. The
+  CIDR lines + summary header). When no database is auto-detected the app falls
+  back to a path the user picked earlier, remembered in `~/.traceroute-geolite2`;
+  `OpenCountryDatabase` writes it. The walk streams `ipblocks:progress`. The
   frontend `IPBlocksModal` (Tools ▾ → **Country IP blocks**) lists countries
   with block/address counts, then shows a paged/filtered block list (first 2000
-  lines) and offers **Export blocks**; `ReleaseCountryBlocks` is called on
-  close. Because a country like the US has ~1.45M blocks, the modal never
-  renders the full list on screen.
+  lines) and offers **Select database…** and **Export blocks**; clicking
+  **Load countries** without a database prompts for one; `ReleaseCountryBlocks`
+  is called on close. Because a country like the US has ~1.45M blocks, the modal
+  never renders the full list on screen.
 - **Shared-hop correlation** is computed in the UI (`ui_model.go`): IPs present
   in 2+ traces become `sharedHops`, highlighted on the map and in the hop list.
 
@@ -341,14 +346,19 @@ PLAN.md                     design/architecture document
   [0,1] coordinates; the widget scales by `TileSize * 2^zoom`. Land/country
   `QPainterPath`s are built once at startup and reused across zoom and theme.
 - **One main window.** Toolbar row (target box + PORTS badge, Trace/Scan/Ports/
-  Cancel, Tools menu, Correlate, theme toggle) -> `QSplitter` (sidebar tabs:
-  Hops / Traces / Subdomains / Correlation | map) -> `QStatusBar`. Panes scroll
-  internally; the window itself does not.
-- **Floating windows are native decorated tool windows.** Each console/log
-  channel (`dns`, `subdomains`, `crawl`, `trace`, `ports`, `origin`, `console`)
-  is a `QWidget`/`QDialog` with a `QPlainTextEdit`, created lazily via
-  `ensureChannel`. Netcat sessions and every tool dialog (scan, port, domain,
-  unmask, endpoint, GeoIP cache, country blocks) are their own windows.
+  Cancel, Tools menu, Windows menu, Correlate, theme toggle) -> `QSplitter`
+  (sidebar tabs: Hops / Traces / Subdomains / Correlation | map) -> `QStatusBar`.
+  Panes scroll internally; the window itself does not.
+- **Log channels are dock widgets; tool windows are transient.** Each console/log
+  channel (`console`, `trace`, `dns`, `subdomains`, `crawl`, `ports`, `origin`,
+  `netcat`) is a `QDockWidget` holding a `QPlainTextEdit`, created lazily via
+  `ensureChannel` and docked (tabified) into the main window's bottom area on
+  first `openChannel`, so it can never be hidden behind the main window. The
+  **Windows** menu lists every channel (`Ctrl+1…8`) and tool window. Netcat
+  sessions and every tool dialog (scan, port, domain, unmask, endpoint, GeoIP
+  cache, country blocks, history) are transient `QDialog`s parented to the main
+  window via `newFloatingDialog`, which keeps them above it on X11, Wayland and
+  Windows — replacing `WindowStaysOnTopHint`, which Wayland ignores.
 - **Typed events, no JSON.** `app.go` emits Go structs through `EventSink`;
   `ui_app.go`'s `handle` type-switches on them. All UI mutation runs on the Qt
   GUI thread via `mainthread.Start`.

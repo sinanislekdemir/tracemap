@@ -300,10 +300,18 @@ func (u *uiApp) buildToolbar() *qt.QWidget {
 	addMenuAction(menu, "GeoIP cache", func() { u.openGeoCacheDialog() })
 	addMenuAction(menu, "Country IP blocks", func() { u.openIPBlocksDialog() })
 	menu.AddSeparator()
-	addMenuAction(menu, "Console", func() { u.ensureChannel("console").show() })
+	addMenuAction(menu, "Console", func() { u.openChannel("console") })
 	addMenuAction(menu, "Toggle theme", func() { u.toggleTheme() })
 	tools.SetMenu(menu)
 	h.AddWidget(tools.QWidget)
+
+	windows := qt.NewQToolButton2()
+	windows.SetText("Windows")
+	windows.SetPopupMode(qt.QToolButton__InstantPopup)
+	wmenu := qt.NewQMenu2()
+	u.buildWindowsMenu(wmenu)
+	windows.SetMenu(wmenu)
+	h.AddWidget(windows.QWidget)
 
 	h.AddStretch()
 
@@ -316,6 +324,84 @@ func (u *uiApp) buildToolbar() *qt.QWidget {
 	h.AddWidget(u.motionB.QWidget)
 
 	return row
+}
+
+// logChannels lists the docked console channels in Windows-menu order. The
+// first entries get Ctrl+1..Ctrl+9 accelerators.
+var logChannels = []struct{ kind, title string }{
+	{"console", "Console"},
+	{"trace", "Trace log"},
+	{"dns", "DNS records"},
+	{"subdomains", "Subdomains"},
+	{"crawl", "Crawl"},
+	{"ports", "Ports"},
+	{"origin", "Origin"},
+	{"netcat", "Netcat"},
+}
+
+// buildWindowsMenu fills the Windows menu with quick access to the docked log
+// channels and the tool windows, so a window that is hidden, closed or merely
+// behind another can be summoned with two clicks (or Ctrl+1..8).
+func (u *uiApp) buildWindowsMenu(menu *qt.QMenu) {
+	for i, ch := range logChannels {
+		ch := ch
+		a := addMenuAction(menu, ch.title, func() { u.openChannel(ch.kind) })
+		if i < 9 {
+			a.SetShortcut(qt.NewQKeySequence2(fmt.Sprintf("Ctrl+%d", i+1)))
+		}
+	}
+
+	menu.AddSeparator()
+	addMenuAction(menu, "Scan options", func() { u.openScanDialog() })
+	addMenuAction(menu, "Port scan", func() {
+		if u.portDlg == nil || !raiseDialog(u.portDlg.win) {
+			u.openPortScanDialog()
+		}
+	})
+	addMenuAction(menu, "Domain analysis", func() {
+		if u.domainDlg == nil || !raiseDialog(u.domainDlg.win) {
+			u.openDomainDialog()
+		}
+	})
+	addMenuAction(menu, "Unmask target", func() {
+		if u.originDlg == nil || !raiseDialog(u.originDlg.win) {
+			u.openOriginDialog()
+		}
+	})
+	addMenuAction(menu, "Endpoint analysis", func() {
+		if u.endpointDlg == nil || !raiseDialog(u.endpointDlg.win) {
+			u.openEndpointDialog()
+		}
+	})
+	addMenuAction(menu, "Netcat", func() { u.openNetcat() })
+	addMenuAction(menu, "Netcat cheatsheets", func() { u.openCheatsheet("") })
+	addMenuAction(menu, "GeoIP cache", func() {
+		if u.geocacheDlg == nil || !raiseDialog(u.geocacheDlg.win) {
+			u.openGeoCacheDialog()
+		}
+	})
+	addMenuAction(menu, "Country IP blocks", func() {
+		if u.ipblocksDlg == nil || !raiseDialog(u.ipblocksDlg.win) {
+			u.openIPBlocksDialog()
+		}
+	})
+	addMenuAction(menu, "History", func() {
+		if u.historyDlg == nil || !raiseDialog(u.historyDlg.win) {
+			u.openHistoryDialog()
+		}
+	})
+}
+
+// raiseDialog shows and raises an existing transient window, reporting whether
+// it existed. Used by the Windows menu to re-focus an already-open tool.
+func raiseDialog(win *qt.QDialog) bool {
+	if win == nil {
+		return false
+	}
+	win.Show()
+	win.Raise()
+	win.ActivateWindow()
+	return true
 }
 
 // motionLabel renders the Motion toggle's label for its on/off state.

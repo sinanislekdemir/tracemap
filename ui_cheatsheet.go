@@ -48,7 +48,7 @@ type cheatsheetDialog struct {
 // sheet id.
 func (u *uiApp) openCheatsheet(id string) {
 	d := &cheatsheetDialog{}
-	d.win = newFloatingDialog()
+	d.win = newFloatingDialog(u.win.QWidget)
 	d.win.SetWindowTitle("Netcat cheatsheets")
 	d.win.Resize(780, 720)
 	v := qt.NewQVBoxLayout(d.win.QWidget)

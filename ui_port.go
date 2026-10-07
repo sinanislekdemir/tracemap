@@ -62,7 +62,7 @@ func (d *portDialog) build(host, label string) {
 		explicitPorts = ports
 	}
 
-	d.win = newFloatingDialog()
+	d.win = newFloatingDialog(d.u.win.QWidget)
 	d.win.SetWindowTitle("Port scan · " + d.target)
 	d.win.Resize(720, 560)
 	v := qt.NewQVBoxLayout(d.win.QWidget)

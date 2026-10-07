@@ -68,7 +68,7 @@ type historyDialog struct {
 
 func (u *uiApp) openHistoryDialog() {
 	d := &historyDialog{u: u}
-	d.win = newFloatingDialog()
+	d.win = newFloatingDialog(u.win.QWidget)
 	d.win.SetWindowTitle("History")
 	d.win.Resize(720, 520)
 	v := qt.NewQVBoxLayout(d.win.QWidget)

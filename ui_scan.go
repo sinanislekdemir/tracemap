@@ -62,7 +62,7 @@ func (u *uiApp) openScanDialog() {
 	}
 
 	d := &scanOptionsUI{}
-	dlg := newFloatingDialog()
+	dlg := newFloatingDialog(u.win.QWidget)
 	dlg.SetWindowTitle("Scan options · " + target)
 	dlg.Resize(520, 720)
 	v := qt.NewQVBoxLayout(dlg.QWidget)

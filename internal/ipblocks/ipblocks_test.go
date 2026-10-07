@@ -3,6 +3,7 @@ package ipblocks
 import (
 	"context"
 	"net/netip"
+	"path/filepath"
 	"testing"
 )
 
@@ -67,6 +68,18 @@ func TestHumanCount(t *testing.T) {
 		if got := humanCount(tt.in); got != tt.want {
 			t.Errorf("humanCount(%v) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+// TestOpenPathRejectsInvalidInput checks that a blank path and a missing file
+// both fail cleanly, without touching the network or the real database.
+func TestOpenPathRejectsInvalidInput(t *testing.T) {
+	if _, err := OpenPath("   "); err == nil {
+		t.Error("OpenPath(blank) = nil error, want error")
+	}
+	missing := filepath.Join(t.TempDir(), "GeoLite2-Country.mmdb")
+	if _, err := OpenPath(missing); err == nil {
+		t.Errorf("OpenPath(%s) = nil error, want error", missing)
 	}
 }
 

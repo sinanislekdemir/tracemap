@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -163,6 +164,26 @@ func TestFormatPortScanReportNoRows(t *testing.T) {
 // boolPtr returns a pointer to v, for the optional tri-state report fields.
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+// TestGeoDBPathDotfileRoundTrip checks that a user-picked database path is
+// remembered in a dotfile in the home directory and read back.
+func TestGeoDBPathDotfileRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	if got := loadGeoLite2Path(); got != "" {
+		t.Fatalf("loadGeoLite2Path() = %q before saving, want empty", got)
+	}
+
+	saveGeoLite2Path("/opt/GeoIP/GeoLite2-Country.mmdb")
+	if got, want := loadGeoLite2Path(), "/opt/GeoIP/GeoLite2-Country.mmdb"; got != want {
+		t.Fatalf("loadGeoLite2Path() = %q, want %q", got, want)
+	}
+	if dir := filepath.Dir(geoLite2PathFile()); dir != home {
+		t.Fatalf("dotfile dir = %q, want home %q", dir, home)
+	}
 }
 
 func TestFormatCountryBlocksReport(t *testing.T) {

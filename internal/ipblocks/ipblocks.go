@@ -118,6 +118,16 @@ func Open() (*DB, error) {
 	if path == "" {
 		return nil, errors.New("no local GeoLite2 Country or City database found")
 	}
+	return OpenPath(path)
+}
+
+// OpenPath opens an explicit GeoLite2 database file, such as one chosen by the
+// user through the native file dialog.
+func OpenPath(path string) (*DB, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, errors.New("no database path given")
+	}
 	reader, err := maxminddb.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", filepath.Base(path), err)

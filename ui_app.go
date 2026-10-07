@@ -44,18 +44,18 @@ type uiApp struct {
 	win    *qt.QMainWindow
 	status *qt.QStatusBar
 
-	root         *qt.QWidget
-	target       *qt.QLineEdit
-	badge        *qt.QLabel
-	maxHops      *qt.QSpinBox
-	traceB       *qt.QPushButton
-	scanB        *qt.QPushButton
-	portsB       *qt.QPushButton
-	cancelB      *qt.QPushButton
-	addHistB     *qt.QPushButton
-	corrB        *qt.QPushButton
-	motionB      *qt.QPushButton
-	unmaskAction *qt.QAction
+	root           *qt.QWidget
+	target         *qt.QLineEdit
+	badge          *qt.QLabel
+	maxHops        *qt.QSpinBox
+	traceB         *qt.QPushButton
+	scanB          *qt.QPushButton
+	portsB         *qt.QPushButton
+	cancelB        *qt.QPushButton
+	saveHistAction *qt.QAction
+	corrAction     *qt.QAction
+	motionAction   *qt.QAction
+	unmaskAction   *qt.QAction
 
 	statusStats *qt.QLabel
 	statusOp    *qt.QLabel
@@ -206,6 +206,7 @@ func (u *uiApp) build() {
 	u.win.SetCentralWidget(central)
 	u.status = qt.NewQStatusBar2()
 	u.win.SetStatusBar(u.status)
+	u.buildMenuBar()
 
 	// Permanent status-bar readouts: the live elapsed timer on the right, then
 	// the located/shared summary.
@@ -281,53 +282,54 @@ func (u *uiApp) buildToolbar() *qt.QWidget {
 	h.AddWidget(u.portsB.QWidget)
 	h.AddWidget(u.cancelB.QWidget)
 
-	u.addHistB = newButton("+ History", func() { u.saveHistory() })
-	histB := newButton("History", func() { u.openHistoryDialog() })
-	h.AddWidget(u.addHistB.QWidget)
-	h.AddWidget(histB.QWidget)
-
-	tools := qt.NewQToolButton2()
-	tools.SetText("Tools")
-	tools.SetPopupMode(qt.QToolButton__InstantPopup)
-	menu := qt.NewQMenu2()
-	addMenuAction(menu, "Domain analysis", func() { u.openDomainDialog() })
-	u.unmaskAction = addMenuAction(menu, "Unmask target", func() { u.openOriginDialog() })
-	u.unmaskAction.SetEnabled(false)
-	addMenuAction(menu, "Port scan", func() { u.openPortScanDialog() })
-	addMenuAction(menu, "Endpoint analysis", func() { u.openEndpointDialog() })
-	addMenuAction(menu, "Netcat", func() { u.openNetcat() })
-	addMenuAction(menu, "Netcat cheatsheets", func() { u.openCheatsheet("") })
-	addMenuAction(menu, "GeoIP cache", func() { u.openGeoCacheDialog() })
-	addMenuAction(menu, "Country IP blocks", func() { u.openIPBlocksDialog() })
-	menu.AddSeparator()
-	addMenuAction(menu, "Console", func() { u.openChannel("console") })
-	addMenuAction(menu, "Toggle theme", func() { u.toggleTheme() })
-	tools.SetMenu(menu)
-	h.AddWidget(tools.QWidget)
-
-	windows := qt.NewQToolButton2()
-	windows.SetText("Windows")
-	windows.SetPopupMode(qt.QToolButton__InstantPopup)
-	wmenu := qt.NewQMenu2()
-	u.buildWindowsMenu(wmenu)
-	windows.SetMenu(wmenu)
-	h.AddWidget(windows.QWidget)
+	clean := newButton("Clean", func() { u.clean() })
+	h.AddWidget(clean.QWidget)
 
 	h.AddStretch()
-
-	u.corrB = newButton("Correlate", func() {
-		u.setCorrelate(!u.correlate)
-	})
-	h.AddWidget(u.corrB.QWidget)
-
-	u.motionB = newButton(motionLabel(u.motion), func() { u.setMotion(!u.motion) })
-	h.AddWidget(u.motionB.QWidget)
 
 	return row
 }
 
+// buildMenuBar creates the main-window menu bar. The non-urgent actions that
+// used to crowd the toolbar (history, correlate/motion, tools, window list)
+// live here; the toolbar keeps only the target controls and Trace/Scan/Ports/
+// Cancel/Clean.
+func (u *uiApp) buildMenuBar() {
+	bar := u.win.MenuBar()
+
+	file := bar.AddMenuWithTitle("&File")
+	u.saveHistAction = addMenuAction(file, "Save current view", func() { u.saveHistory() })
+	u.saveHistAction.SetEnabled(false)
+	addMenuAction(file, "Browse history…", func() { u.openHistoryDialog() })
+	file.AddSeparator()
+	addMenuAction(file, "Clean state", func() { u.clean() })
+
+	view := bar.AddMenuWithTitle("&View")
+	u.corrAction = addMenuAction(view, "Correlate", func() { u.setCorrelate(!u.correlate) })
+	u.corrAction.SetCheckable(true)
+	u.motionAction = addMenuAction(view, "Motion", func() { u.setMotion(!u.motion) })
+	u.motionAction.SetCheckable(true)
+	u.motionAction.SetChecked(u.motion)
+	view.AddSeparator()
+	addMenuAction(view, "Toggle theme", func() { u.toggleTheme() })
+
+	tools := bar.AddMenuWithTitle("&Tools")
+	u.unmaskAction = addMenuAction(tools, "Unmask target", func() { u.openOriginDialog() })
+	u.unmaskAction.SetEnabled(false)
+	addMenuAction(tools, "Domain analysis", func() { u.openDomainDialog() })
+	addMenuAction(tools, "Port scan", func() { u.openPortScanDialog() })
+	addMenuAction(tools, "Endpoint analysis", func() { u.openEndpointDialog() })
+	addMenuAction(tools, "Netcat", func() { u.openNetcat() })
+	addMenuAction(tools, "Netcat cheatsheets", func() { u.openCheatsheet("") })
+	addMenuAction(tools, "GeoIP cache", func() { u.openGeoCacheDialog() })
+	addMenuAction(tools, "Country IP blocks", func() { u.openIPBlocksDialog() })
+
+	windows := bar.AddMenuWithTitle("&Windows")
+	u.buildWindowsMenu(windows)
+}
+
 // logChannels lists the docked console channels in Windows-menu order. The
-// first entries get Ctrl+1..Ctrl+9 accelerators.
+// first entries get Ctrl+1..8 accelerators.
 var logChannels = []struct{ kind, title string }{
 	{"console", "Console"},
 	{"trace", "Trace log"},
@@ -404,19 +406,11 @@ func raiseDialog(win *qt.QDialog) bool {
 	return true
 }
 
-// motionLabel renders the Motion toggle's label for its on/off state.
-func motionLabel(on bool) string {
-	if on {
-		return "Motion ✓"
-	}
-	return "Motion"
-}
-
 // setMotion toggles the travelling route-marker animation.
 func (u *uiApp) setMotion(on bool) {
 	u.motion = on
-	if u.motionB != nil {
-		u.motionB.SetText(motionLabel(on))
+	if u.motionAction != nil {
+		u.motionAction.SetChecked(on)
 	}
 	if u.mapView != nil {
 		u.mapView.SetMotion(on)
@@ -671,8 +665,8 @@ func (u *uiApp) resetForOperation() {
 	u.scanDone = 0
 	u.scanTotal = 0
 	u.correlate = false
-	if u.corrB != nil {
-		u.corrB.SetText("Correlate")
+	if u.corrAction != nil {
+		u.corrAction.SetChecked(false)
 	}
 	u.scanCompleted = false
 	if u.unmaskAction != nil {
@@ -685,6 +679,55 @@ func (u *uiApp) resetForOperation() {
 	}
 	u.refreshSidebar()
 	u.refreshMap()
+}
+
+// clean resets the whole in-memory session — traces, map, DNS records,
+// subdomains, origins, logs, the target box and the port-scan results — without
+// touching the persistent database (geo cache, history, subdomain cache).
+func (u *uiApp) clean() {
+	// Stop anything in flight so late events cannot repopulate the view.
+	u.app.Cancel()
+	u.app.CancelPortScan()
+	u.finishOp()
+
+	u.resetForOperation()
+
+	// resetForOperation clears only the discovery/trace channels; a clean slate
+	// clears every console channel too.
+	for _, w := range u.channels {
+		w.clear()
+	}
+
+	if u.target != nil {
+		u.target.SetText("")
+	}
+	if u.maxHops != nil {
+		u.maxHops.SetValue(u.defaultMaxHops())
+	}
+	if u.portDlg != nil {
+		u.portDlg.clear()
+	}
+	if u.popup != nil {
+		u.popup.Close()
+		u.popup = nil
+	}
+
+	u.lastTarget = nil
+	u.lastMaxHops = u.defaultMaxHops()
+	u.dnsOpen = true
+	if u.dnsToggle != nil {
+		u.dnsToggle.SetText("▾ DNS RECORDS")
+	}
+	u.rightVisible = false
+	if u.rightBar != nil {
+		u.rightBar.Hide()
+	}
+	if u.status != nil {
+		u.status.ShowMessage("Ready")
+	}
+	u.refreshSidebar()
+	u.refreshMap()
+	u.layoutPanes()
 }
 
 // ---- event dispatch ----
@@ -1342,8 +1385,8 @@ func (u *uiApp) refreshSidebar() {
 		u.layoutPanes()
 	}
 
-	if u.addHistB != nil {
-		u.addHistB.SetEnabled(len(u.traces) > 0)
+	if u.saveHistAction != nil {
+		u.saveHistAction.SetEnabled(len(u.traces) > 0)
 	}
 }
 
@@ -1625,12 +1668,8 @@ func (u *uiApp) traceHost(host string) {
 // (deduplicated hops) view.
 func (u *uiApp) setCorrelate(on bool) {
 	u.correlate = on
-	if u.corrB != nil {
-		if on {
-			u.corrB.SetText("Correlate ✓")
-		} else {
-			u.corrB.SetText("Correlate")
-		}
+	if u.corrAction != nil {
+		u.corrAction.SetChecked(on)
 	}
 	u.refreshMap()
 	u.refreshSidebar()

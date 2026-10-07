@@ -322,6 +322,21 @@ func portCount(req PortScanRequest) int {
 	return 0
 }
 
+// clear empties the results table, activity log and counters so the dialog can
+// be reused after a reset.
+func (d *portDialog) clear() {
+	if d.table != nil {
+		d.table.Clear()
+	}
+	if d.activity != nil {
+		d.activity.Clear()
+	}
+	d.opens = nil
+	d.open = 0
+	d.scanned = 0
+	d.targets = 0
+}
+
 func (d *portDialog) addOpen(ev PortOpenEvent) {
 	item := qt.NewQTreeWidgetItem3(d.table)
 	item.SetText(0, ev.Host)
@@ -400,6 +415,13 @@ func (d *portDialog) resultMenu(pos *qt.QPoint) {
 		return
 	}
 	menu := qt.NewQMenu2()
+	// Web services get a browser shortcut (QDesktopServices uses the platform
+	// default handler on Linux, macOS and Windows).
+	if url, ok := ev.Result.WebURL(ev.Host); ok {
+		addMenuAction(menu, "Open in browser", func() {
+			qt.QDesktopServices_OpenUrl(qt.NewQUrl3(url))
+		})
+	}
 	addMenuAction(menu, "Netcat…", func() { d.u.openNetcatFor(ev.Host, ev.Result.Port, ev.Result.TLS) })
 	addMenuAction(menu, "Trace this host", func() { d.u.traceHost(ev.Host) })
 	addMenuAction(menu, "Copy IP", func() { qt.QGuiApplication_Clipboard().SetText(ev.Host) })

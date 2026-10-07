@@ -186,6 +186,9 @@ PLAN.md                     design/architecture document
   FTP `220`) the probe also attempts an anonymous login (`USER anonymous` /
   `PASS`) and records the verdict in `Result.FTPAnonymous`; the port-scan report
   prints `anonymous FTP: ANONYMOUS LOGIN ALLOWED` / `authentication required`.
+  `Result.WebScheme`/`WebURL` map an HTTP/HTTPS service to its browser URL, which
+  the port-scan results context menu offers as **Open in browser** (via
+  `QDesktopServices`, so it uses the platform handler on all three OSes).
   Events: `portscan:open`, `portscan:progress`, `portscan:done`,
   `portscan:error`; results are not persisted. `ScanPorts` owns a dedicated
   canceler (`portOps`), so it neither stops nor is stopped by traces/scans;

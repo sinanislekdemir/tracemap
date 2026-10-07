@@ -206,16 +206,20 @@ jobs:
           cache: false
 
       - name: Build AppImage
+        shell: bash
         env:
           INSTALL_DEPS: "1"
           DEBIAN_FRONTEND: noninteractive
         run: |
+          # The mounted workspace is owned by a different uid than the
+          # container's root, so git refuses it ("dubious ownership") and
+          # `go build`'s VCS stamping fails. Mark it safe before building.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           chmod +x scripts/build-appimage.sh
-          if [[ "$GITHUB_REF" =~ ^refs/tags/ ]]; then
-            export VERSION="${GITHUB_REF_NAME}"
-          else
-            export VERSION="0.0.0"
-          fi
+          case "$GITHUB_REF" in
+            refs/tags/*) export VERSION="$GITHUB_REF_NAME" ;;
+            *) export VERSION="0.0.0" ;;
+          esac
           ./scripts/build-appimage.sh
 
       - name: Upload artifact

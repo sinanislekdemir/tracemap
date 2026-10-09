@@ -127,6 +127,7 @@ type uiApp struct {
 	ipblocksDlg *ipblocksDialog
 	historyDlg  *historyDialog
 	netcats     map[string]*netcatWindow
+	netcatEOL   int
 	popup       *qt.QWidget
 
 	themeDark bool
@@ -326,6 +327,11 @@ func (u *uiApp) buildMenuBar() {
 
 	windows := bar.AddMenuWithTitle("&Windows")
 	u.buildWindowsMenu(windows)
+
+	help := bar.AddMenuWithTitle("&Help")
+	addMenuAction(help, "About "+appName, func() { u.openAbout() })
+	addMenuAction(help, "Licenses & notices", func() { u.openNotices() })
+	addMenuAction(help, "About Qt", func() { qt.QMessageBox_AboutQt2(u.win.QWidget, "About Qt") })
 }
 
 // logChannels lists the docked console channels in Windows-menu order. The

@@ -71,6 +71,11 @@ install -m 0755 "$BIN" "$APPDIR/usr/bin/${APP_NAME}"
 cp "$DESKTOP_FILE" "$APPDIR/usr/share/applications/${APP_NAME}.desktop"
 cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png"
 
+# License and third-party notices, including the Qt LGPL/GPL texts.
+mkdir -p "$APPDIR/usr/share/doc/${APP_NAME}/LICENSES"
+cp LICENSE THIRD_PARTY_NOTICES.md "$APPDIR/usr/share/doc/${APP_NAME}/"
+cp LICENSES/*.txt "$APPDIR/usr/share/doc/${APP_NAME}/LICENSES/"
+
 # linuxdeploy-plugin-qt locates the Qt installation through qmake.
 export QMAKE="${QMAKE:-$(command -v qmake6 || command -v qmake || true)}"
 if [ -z "${QMAKE:-}" ] || [ ! -x "$QMAKE" ]; then

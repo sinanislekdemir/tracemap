@@ -26,6 +26,16 @@ contents:
     dst: /usr/share/applications/tracemap.desktop
   - src: build/appicon.png
     dst: /usr/share/icons/hicolor/256x256/apps/tracemap.png
+  # License and third-party notices, including the Qt LGPL/GPL texts the
+  # dynamically linked build must ship.
+  - src: LICENSE
+    dst: /usr/share/doc/tracemap/LICENSE
+  - src: THIRD_PARTY_NOTICES.md
+    dst: /usr/share/doc/tracemap/THIRD_PARTY_NOTICES.md
+  - src: LICENSES/LGPL-3.0.txt
+    dst: /usr/share/doc/tracemap/LICENSES/LGPL-3.0.txt
+  - src: LICENSES/GPL-3.0.txt
+    dst: /usr/share/doc/tracemap/LICENSES/GPL-3.0.txt
 
 # The minimum Qt ABI is pinned (see QT_BASELINE in release.yml): the binary is
 # built against Ubuntu 24.04's Qt6, so an unversioned dependency would let apt

@@ -442,4 +442,9 @@ make check
 
 ## License
 
-[MIT](LICENSE) © 2026 Sinan Islekdemir
+[MIT](LICENSE) © 2026 Sinan Islekdemir <sinan@islekdemir.com>
+
+Third-party components and their licenses (Qt 6 under LGPL-3.0, plus the Go
+modules) are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the full
+Qt LGPL/GPL texts are in [LICENSES/](LICENSES/) and are bundled with the release
+artifacts.

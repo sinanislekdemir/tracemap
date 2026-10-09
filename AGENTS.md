@@ -43,6 +43,26 @@ the Windows zip.
 > `v0.2.1`. It stays as-is (the release already ran); the next release is
 > `v0.3.1`.
 
+### License & notices
+
+The license/notice surfaces ship with every release, so keep them in sync
+whenever a dependency is added, removed or upgraded — and re-check the
+copyright line on a new release year:
+
+- `THIRD_PARTY_NOTICES.md` — the linked Go modules and their licenses. Refresh
+  the module table from the actual build graph:
+  `go list -deps -f '{{with .Module}}{{.Path}} {{.Version}}{{end}}' . | sort -u`.
+- `LICENSE` — the project license (MIT) and the copyright line.
+- `LICENSES/LGPL-3.0.txt`, `LICENSES/GPL-3.0.txt` — full Qt license texts.
+- `ui_notices.go` **embeds** those four files via `//go:embed`; a rename here
+  breaks the build (intentionally), so update the directive too.
+- `ui_about.go` — the `appName`/`appAuthor`/`appEmail`/`appCopyright`/
+  `appLicense` constants shown in the About window.
+- `nfpm.yaml` (`license: MIT`) and `.github/workflows/release.yml` /
+  `scripts/build-appimage.sh` copy `LICENSE` + `THIRD_PARTY_NOTICES.md` +
+  `LICENSES/*.txt` into every artifact — extend those copy steps if the file
+  set changes.
+
 ## Layout
 
 ```
@@ -58,6 +78,8 @@ ui_scan.go                  advanced-scan options window
 ui_port.go                  port-scan window (options + results table + activity)
 ui_tools.go                 domain / unmask / endpoint / GeoIP cache / country-blocks windows
 ui_netcat.go                floating interactive TCP sessions
+ui_about.go                 About window (version, author, license) + Help ▾
+ui_notices.go               embedded license / third-party notices viewer
 ui_helpers.go               CIDR target parsing (mirrors hostscan.ParseCIDR)
 internal/mapdata/           embedded Natural Earth GeoJSON + cities, TopoJSON decode, antimeridian split, Web Mercator
 internal/mapview/           custom QPainter map widget: layers, pan/zoom, hit-testing
@@ -88,6 +110,9 @@ scripts/                    build-appimage.sh (portable AppImage via linuxdeploy
 win/                        MinGW-w64 + static Qt6 cross-compile image for the
                             Windows build (Dockerfile, pkgconfig/, build.sh)
 PLAN.md                     design/architecture document
+LICENSE                     project license (MIT)
+THIRD_PARTY_NOTICES.md      dependency licenses + Qt LGPL/GPL relink notes
+LICENSES/                   full LGPL-3.0 / GPL-3.0 texts (shipped + embedded)
 ```
 
 ## Architecture notes
@@ -245,10 +270,18 @@ PLAN.md                     design/architecture document
   TLS) and a reader goroutine streams raw bytes as `net:data` events (Go
   `[]byte` → base64); `NetSend`/`NetClose` drive it, and `net:closed` reports
   the reason. Sessions live in their own `Manager` registry, independent of the
-  `App.begin()` cancel model, and are all closed on shutdown. The frontend
-  (`NetcatPanel`) decodes base64, escapes control characters and caps scrollback;
-  closing its window unmounts the panel and closes the session. TCP only; no UDP,
-  ANSI terminal emulation, listen mode or file transfer.
+  `App.begin()` cancel model, and are all closed on shutdown. The frontend is one
+  editable `QPlainTextEdit` acting as a line-mode terminal: text before
+  `inputStart` is scrollback, the rest is the current input line, remote output is
+  inserted above it and the cursor is clamped to the input region. Enter sends the
+  line with the EOL selector's terminator (LF / CRLF / CR / None, remembered
+  across sessions); Up/Down recall history; Ctrl+C sends the interrupt byte (or
+  copies when a selection exists), Ctrl+D sends EOT, Ctrl+U clears the line and
+  Ctrl+L clears the screen. Incoming bytes are filtered (ANSI escape sequences and
+  other control characters stripped, CRLF/CR normalised), and **Copy netcat
+  command** puts an equivalent `nc host port` / `ncat --ssl` command on the
+  clipboard. TCP only; no UDP, ANSI terminal emulation, listen mode or file
+  transfer.
 - **Origin discovery** (`internal/origin`, "Unmask target"): keyless, all-local
   hunt for the true origin behind a CDN/reverse proxy. `App.UnmaskTarget`
   (own cancellation context, like `AnalyzeDomain`) reuses the last scan's

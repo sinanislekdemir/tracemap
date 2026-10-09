@@ -81,7 +81,13 @@ jobs:
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
-          tar -czf "tracemap-${GITHUB_REF_NAME}-linux-amd64.tar.gz" -C build/bin traceroute
+          # Ship the license/notices (including the Qt LGPL/GPL texts) alongside
+          # the bare binary in the tarball, not only in the .deb/.rpm.
+          mkdir -p dist/tracemap/LICENSES
+          cp build/bin/traceroute dist/tracemap/
+          cp LICENSE THIRD_PARTY_NOTICES.md dist/tracemap/
+          cp LICENSES/*.txt dist/tracemap/LICENSES/
+          tar -czf "tracemap-${GITHUB_REF_NAME}-linux-amd64.tar.gz" -C dist tracemap
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
           export PATH="$PATH:$(go env GOPATH)/bin"
           VERSION="${GITHUB_REF_NAME#v}"
@@ -96,9 +102,11 @@ jobs:
           set -euo pipefail
           APP="build/bin/tracemap.app"
           rm -rf "$APP"
-          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/LICENSES"
           cp build/bin/traceroute "$APP/Contents/MacOS/tracemap"
           cp build/appicon.png "$APP/Contents/Resources/appicon.png"
+          cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
+          cp LICENSES/*.txt "$APP/Contents/Resources/LICENSES/"
           cat > "$APP/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -169,7 +177,11 @@ jobs:
 
       - name: Package Windows zip
         run: |
-          zip -j "tracemap-${GITHUB_REF_NAME}-windows-amd64.zip" build-win/tracemap.exe
+          # -j flattens the LICENSES/ paths to the zip root. The static Qt build
+          # must ship the LGPL/GPL texts and the relink offer.
+          zip -j "tracemap-${GITHUB_REF_NAME}-windows-amd64.zip" \
+            build-win/tracemap.exe LICENSE THIRD_PARTY_NOTICES.md \
+            LICENSES/LGPL-3.0.txt LICENSES/GPL-3.0.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

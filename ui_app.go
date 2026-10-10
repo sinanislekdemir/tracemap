@@ -11,6 +11,7 @@ import (
 	"github.com/mappu/miqt/qt6/mainthread"
 
 	"traceroute/internal/dnscheck"
+	"traceroute/internal/geolocator"
 	"traceroute/internal/httpcheck"
 	"traceroute/internal/mapdata"
 	"traceroute/internal/mapview"
@@ -111,6 +112,7 @@ type uiApp struct {
 	scanPhase      string
 	scanDone       int
 	scanTotal      int
+	seenPhases     map[string]bool
 	populatingSubs bool
 	scanCompleted  bool
 	dnsOpen        bool
@@ -151,6 +153,7 @@ func newUI(app *App, world *mapdata.World) *uiApp {
 		motion:       true,
 		sharedHops:   map[string]int{},
 		selectedSubs: map[string]bool{},
+		seenPhases:   map[string]bool{},
 		channels:     map[string]*logWindow{},
 		themeDark:    true,
 		dnsOpen:      true,
@@ -299,7 +302,7 @@ func (u *uiApp) buildMenuBar() {
 	bar := u.win.MenuBar()
 
 	file := bar.AddMenuWithTitle("&File")
-	u.saveHistAction = addMenuAction(file, "Save current view", func() { u.saveHistory() })
+	u.saveHistAction = addMenuAction(file, "Add results to history", func() { u.saveHistory() })
 	u.saveHistAction.SetEnabled(false)
 	addMenuAction(file, "Browse history…", func() { u.openHistoryDialog() })
 	file.AddSeparator()
@@ -335,8 +338,9 @@ func (u *uiApp) buildMenuBar() {
 }
 
 // logChannels lists the docked console channels in Windows-menu order. The
-// first entries get Ctrl+1..8 accelerators.
+// first entries get Ctrl+1..9 accelerators.
 var logChannels = []struct{ kind, title string }{
+	{"activity", "Activity"},
 	{"console", "Console"},
 	{"trace", "Trace log"},
 	{"dns", "DNS records"},
@@ -594,6 +598,18 @@ func (u *uiApp) startTrace() {
 	if cidr, ports, ok := parseBlockTarget(target); ok {
 		u.resetForOperation()
 		u.startOp("block " + cidr)
+		u.openChannel("trace")
+		portsLabel := ""
+		if strings.TrimSpace(ports) != "" {
+			portsLabel = " · ports " + strings.TrimSpace(ports)
+		}
+		u.startActivity(fmt.Sprintf("block trace %s%s · max %d hops", cidr, portsLabel, hops), []activityStep{
+			{Label: "discover live hosts", Enabled: true},
+			{Label: "traceroute live hosts", Enabled: true},
+			{Label: "geolocate hops", Enabled: true},
+		})
+		u.logLine("trace", "info", fmt.Sprintf("▶ block trace %s%s · max %d hops", cidr, portsLabel, hops))
+		u.logLine("console", "info", fmt.Sprintf("▶ block trace %s%s", cidr, portsLabel))
 		go func() {
 			err := u.app.TraceBlock(TraceBlockRequest{CIDR: cidr, PortRange: ports, MaxHops: hops})
 			u.afterOp(err)
@@ -602,6 +618,14 @@ func (u *uiApp) startTrace() {
 	}
 	u.resetForOperation()
 	u.startOp("trace " + target)
+	u.openChannel("trace")
+	u.startActivity(fmt.Sprintf("trace %s · max %d hops", target, hops), []activityStep{
+		{Label: "resolve target", Enabled: true},
+		{Label: "traceroute", Enabled: true},
+		{Label: "geolocate hops", Enabled: true},
+	})
+	u.logLine("trace", "info", fmt.Sprintf("▶ trace %s · max %d hops", target, hops))
+	u.logLine("console", "info", fmt.Sprintf("▶ trace %s · max %d hops", target, hops))
 	go func() {
 		err := u.app.Trace(TraceRequest{Target: target, MaxHops: hops})
 		u.afterOp(err)
@@ -648,6 +672,72 @@ func (u *uiApp) updateElapsed() {
 	u.statusOp.SetText(fmt.Sprintf("%s · %s", u.opLabel, time.Since(u.opStarted).Round(time.Second)))
 }
 
+// activityStep is one line in the Activity panel's run plan. An enabled step is
+// scheduled to run; a disabled one is reported as "not selected" so the user can
+// see at a glance what the operation is deliberately skipping.
+type activityStep struct {
+	Label   string
+	Enabled bool
+}
+
+// startActivity clears the Activity panel and prints the run plan for the
+// operation about to start. Every step is listed up front — including the ones
+// that are not selected — so one panel answers "what is running, and what is
+// not?". It docks and raises the panel so progress is never hidden behind a tab
+// the user did not know to check.
+func (u *uiApp) startActivity(title string, steps []activityStep) {
+	u.seenPhases = map[string]bool{}
+	u.openChannel("activity")
+	u.ensureChannel("activity").clear()
+	u.logLine("activity", "info", "▶ "+title)
+	for _, s := range steps {
+		if s.Enabled {
+			u.logLine("activity", "info", "  · "+s.Label+" — scheduled")
+		} else {
+			u.logLine("activity", "info", "  – "+s.Label+" — not selected")
+		}
+	}
+}
+
+// activityf appends one progress line to the Activity panel.
+func (u *uiApp) activityf(level, format string, args ...any) {
+	u.logLine("activity", level, fmt.Sprintf(format, args...))
+}
+
+// activityPhase opens a phase's section in the Activity panel the first time it
+// is seen for the current operation, so a running scan shows which phase is
+// active without repeating every progress tick.
+func (u *uiApp) activityPhase(phase string) {
+	if u.seenPhases[phase] {
+		return
+	}
+	u.seenPhases[phase] = true
+	u.activityf("info", "  ▸ %s …", activityPhaseLabel(phase))
+}
+
+// activityPhaseLabel maps a backend scan phase to a human label shared by the
+// run plan and the phase lines.
+func activityPhaseLabel(phase string) string {
+	switch phase {
+	case "subdomains":
+		return "subdomain brute force"
+	case "ptr":
+		return "reverse DNS (PTR)"
+	case "sweep":
+		return "/24 reverse sweep"
+	case "services":
+		return "services (SPF/DMARC/SRV)"
+	case "crawl":
+		return "crawl pages & sitemaps"
+	case "discover":
+		return "discovering live hosts"
+	case "dns":
+		return "dns records"
+	default:
+		return phase
+	}
+}
+
 func (u *uiApp) cancel() {
 	u.app.Cancel()
 	u.finishOp()
@@ -678,7 +768,7 @@ func (u *uiApp) resetForOperation() {
 	if u.unmaskAction != nil {
 		u.unmaskAction.SetEnabled(false)
 	}
-	for _, id := range []string{"dns", "subdomains", "crawl", "trace", "ports", "origin"} {
+	for _, id := range []string{"activity", "dns", "subdomains", "crawl", "trace", "ports", "origin"} {
 		if w := u.channels[id]; w != nil {
 			w.clear()
 		}
@@ -760,6 +850,7 @@ func (u *uiApp) handle(name string, payload any) {
 			u.records = append(u.records, dnsRecord{Type: r.Type, Name: r.Name, Value: r.Value, Priority: r.Priority})
 			u.logLine("dns", "info", fmt.Sprintf("%-6s %s  %s", r.Type, r.Name, r.Value))
 		}
+		u.activityf("ok", "  ✓ dns records · %d resolved", len(recs))
 		u.refreshSidebar()
 	case EventScanTargets:
 		targets := payload.([]dnscheck.Target)
@@ -774,6 +865,11 @@ func (u *uiApp) handle(name string, payload any) {
 			u.lastTarget = append(u.lastTarget, label)
 		}
 		u.status.ShowMessage(fmt.Sprintf("%d targets", len(targets)))
+		u.logLine("trace", "ok", fmt.Sprintf("%d targets queued", len(targets)))
+		u.activityf("info", "  ▸ tracing %d target(s) …", len(targets))
+		for _, t := range targets {
+			u.logLine("trace", "info", fmt.Sprintf("t%d · %s %s → %s", t.ID, t.Kind, t.Label, t.IP))
+		}
 	case EventScanDone:
 		u.status.ShowMessage("scan complete")
 		u.finishOp()
@@ -783,12 +879,16 @@ func (u *uiApp) handle(name string, payload any) {
 		if u.unmaskAction != nil {
 			u.unmaskAction.SetEnabled(true)
 		}
+		u.logLine("trace", "ok", "scan complete")
+		u.logLine("console", "ok", "scan complete")
+		u.activityf("ok", "  ✓ complete")
 		u.refreshSidebar()
 	case EventSubdomains:
 		u.subs = payload.([]subdomains.Result)
 		for _, s := range u.subs {
 			u.logLine("subdomains", "ok", fmt.Sprintf("%s [%s] %s", s.Name, s.Source, strings.Join(s.IPs, ", ")))
 		}
+		u.activityf("ok", "  ✓ subdomains · %d found", len(u.subs))
 		u.refreshSidebar()
 	case EventSubdomainLog:
 		e := payload.(CrawlLogEvent)
@@ -803,11 +903,16 @@ func (u *uiApp) handle(name string, payload any) {
 	case EventCrawl:
 		res := payload.(webcrawl.Result)
 		u.logLine("crawl", "ok", fmt.Sprintf("%d pages crawled", len(res.Pages)))
+		u.activityf("ok", "  ✓ crawl · %d pages", len(res.Pages))
 	case EventBlockLog:
 		e := payload.(BlockLogEvent)
 		u.logLine("trace", e.Level, e.Message)
 	case EventScanProgress:
 		e := payload.(ScanProgressEvent)
+		if e.Phase == "discover" && u.scanPhase != "discover" {
+			u.logLine("trace", "info", "phase · discovering live hosts")
+		}
+		u.activityPhase(e.Phase)
 		u.status.ShowMessage(fmt.Sprintf("%s %d/%d (%d found)", e.Phase, e.Done, e.Total, e.Found))
 		u.scanPhase = e.Phase
 		u.scanDone = e.Done
@@ -822,6 +927,7 @@ func (u *uiApp) handle(name string, payload any) {
 	case EventPortDone:
 		e := payload.(PortScanDoneEvent)
 		u.status.ShowMessage(fmt.Sprintf("port scan done · %d open", e.Open))
+		u.activityf("ok", "  ✓ complete · %d open", e.Open)
 		if u.portDlg != nil {
 			u.portDlg.finish(e)
 		}
@@ -830,6 +936,7 @@ func (u *uiApp) handle(name string, payload any) {
 		e := payload.(ErrorEvent)
 		u.status.ShowMessage(e.Message)
 		u.logLine("ports", "error", e.Message)
+		u.activityf("error", "  ! error: %s", e.Message)
 		if u.portDlg != nil {
 			u.portDlg.fail(e.Message)
 		}
@@ -891,9 +998,15 @@ func (u *uiApp) ensureTrace(id int) *traceState {
 func (u *uiApp) onHop(ev HopEvent) {
 	t := u.ensureTrace(ev.Target)
 	if ev.IP == "" {
+		u.logLine("trace", "info", fmt.Sprintf("t%d · hop %02d · * * * · —", ev.Target, ev.Hop))
 		return
 	}
 	t.Hops = append(t.Hops, hopData{Hop: ev.Hop, IP: ev.IP, RTTMs: ev.RTTMs, HasRTT: ev.RTTMs > 0})
+	rtt := "—"
+	if ev.RTTMs > 0 {
+		rtt = fmt.Sprintf("%.1f ms", ev.RTTMs)
+	}
+	u.logLine("trace", "info", fmt.Sprintf("t%d · hop %02d · %s · %s", ev.Target, ev.Hop, ev.IP, rtt))
 	u.recomputeShared()
 	u.refreshMap()
 	u.refreshSidebar()
@@ -908,6 +1021,7 @@ func (u *uiApp) onGeo(ev GeoEvent) {
 			break
 		}
 	}
+	u.logLine("trace", "info", fmt.Sprintf("t%d · hop %02d · geo %s", ev.Target, ev.Hop, geoPlace(g)))
 	u.refreshMap()
 	u.refreshSidebar()
 }
@@ -918,6 +1032,7 @@ func (u *uiApp) onTarget(ev TargetEvent) {
 	if t.Label == "target" || t.Label == "trace" {
 		t.Label = ev.IP
 	}
+	u.logLine("trace", "ok", fmt.Sprintf("t%d · target resolved %s", ev.Target, ev.IP))
 	u.refreshMap()
 }
 
@@ -925,6 +1040,7 @@ func (u *uiApp) onTargetGeo(ev TargetGeoEvent) {
 	t := u.ensureTrace(ev.Target)
 	g := ev.Geo
 	t.TargetGeo = &g
+	u.logLine("trace", "info", fmt.Sprintf("t%d · target geo %s", ev.Target, geoPlace(g)))
 	u.refreshMap()
 }
 
@@ -933,6 +1049,11 @@ func (u *uiApp) onDone(ev DoneEvent) {
 	t.Done = true
 	u.cancelB.SetEnabled(false)
 	u.status.ShowMessage(fmt.Sprintf("%s done · %d hops", t.Label, len(t.Hops)))
+	u.logLine("trace", "ok", fmt.Sprintf("t%d · done · %d hops", ev.Target, ev.Hops))
+	if ev.Target == 0 {
+		u.logLine("console", "ok", fmt.Sprintf("trace complete · %d hops", ev.Hops))
+		u.activityf("ok", "  ✓ trace complete · %d hops", ev.Hops)
+	}
 	u.refreshSidebar()
 }
 
@@ -944,11 +1065,26 @@ func (u *uiApp) onError(ev ErrorEvent) {
 		if ev.Code == "missing-tool" && ev.Hint != "" {
 			u.logLine("console", "error", ev.Hint)
 		}
+		u.logLine("trace", "error", fmt.Sprintf("t0 · error: %s", ev.Message))
 		return
 	}
 	t := u.ensureTrace(ev.Target)
 	t.Error = ev.Message
+	u.logLine("trace", "error", fmt.Sprintf("t%d · error: %s", ev.Target, ev.Message))
 	u.refreshSidebar()
+}
+
+// geoPlace formats a geo result as "City, Country" (plus the ASN when known),
+// falling back to "unknown" so the trace log always names a location.
+func geoPlace(g geolocator.GeoData) string {
+	place := strings.TrimSpace(strings.Trim(strings.TrimSpace(g.City)+", "+strings.TrimSpace(g.Country), ", "))
+	if place == "" {
+		place = "unknown"
+	}
+	if asn := strings.TrimSpace(g.ASN); asn != "" {
+		place += " · " + asn
+	}
+	return place
 }
 
 func (u *uiApp) onMarkerSelect(id string, meta any, gx, gy int) {
@@ -1587,6 +1723,16 @@ func (u *uiApp) traceSelectedSubs() {
 	u.lastMaxHops = u.maxHops.Value()
 	u.startOp(fmt.Sprintf("trace %d subs", len(hosts)))
 	u.openChannel("trace")
+	word := "hosts"
+	if len(hosts) == 1 {
+		word = "host"
+	}
+	u.startActivity(fmt.Sprintf("trace %d selected %s", len(hosts), word), []activityStep{
+		{Label: "resolve selected hosts", Enabled: true},
+		{Label: "traceroute", Enabled: true},
+		{Label: "geolocate hops", Enabled: true},
+	})
+	u.logLine("trace", "info", fmt.Sprintf("▶ trace %d selected %s", len(hosts), word))
 	u.refreshMap()
 	u.refreshSidebar()
 	go func() {
@@ -1664,6 +1810,12 @@ func (u *uiApp) traceHost(host string) {
 	u.lastMaxHops = u.maxHops.Value()
 	u.startOp("trace " + host)
 	u.openChannel("trace")
+	u.startActivity(fmt.Sprintf("trace %s · max %d hops", host, u.maxHops.Value()), []activityStep{
+		{Label: "resolve target", Enabled: true},
+		{Label: "traceroute", Enabled: true},
+		{Label: "geolocate hops", Enabled: true},
+	})
+	u.logLine("trace", "info", fmt.Sprintf("▶ trace %s · max %d hops", host, u.maxHops.Value()))
 	go func() {
 		err := u.app.Trace(TraceRequest{Target: host, MaxHops: u.maxHops.Value()})
 		u.afterOp(err)

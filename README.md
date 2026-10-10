@@ -260,8 +260,9 @@ minutes; later builds are incremental.
    resize instead.
 8. Press **Cancel** to stop a running trace/scan; the domain, unmask, endpoint
    and port windows have their own **Cancel** buttons.
-9. Press **+ History** to save the current view, and **History** to browse,
-   load, correlate, delete or clear saved entries.
+9. Choose **File ▾ → Add results to history** to save the current view, and
+   **File ▾ → Browse history…** to browse, load, correlate, delete or clear saved
+   entries.
 10. **Tools ▾** also opens the **GeoIP cache** (filter, delete single entries or
     clear all), the **Country IP blocks** browser (family and CIDR filters, a
     **Select database…** button to point at a GeoLite2 `.mmdb` file when none is
@@ -278,7 +279,8 @@ even if the trace never reaches it.
 
 ## History & comparison
 
-- **Saving is explicit** — nothing is stored until you choose **+ History**.
+- **Saving is explicit** — nothing is stored until you choose **File ▾ → Add
+  results to history**.
 - The **History** window lists every saved entry with its kind, target, path
   count, hop count and timestamp. Select one or more entries and choose
   **Load selected** to replay them, or **Correlate selected** to merge their

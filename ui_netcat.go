@@ -115,7 +115,7 @@ func (u *uiApp) openNetcatFor(host string, port int, tls bool) *netcatWindow {
 
 	// One editable pane that behaves like a line-mode terminal.
 	d.out = qt.NewQPlainTextEdit2()
-	d.out.SetFont(monoFont())
+	applyTerminalStyle(d.out)
 	d.out.SetUndoRedoEnabled(false)
 	d.out.SetTabChangesFocus(false)
 	d.out.SetPlaceholderText("type here and press Enter")

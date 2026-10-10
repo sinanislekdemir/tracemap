@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	qt "github.com/mappu/miqt/qt6"
@@ -206,6 +207,17 @@ func (u *uiApp) openScanDialog() {
 		for _, c := range []string{"dns", "subdomains", "crawl", "trace"} {
 			u.openChannel(c)
 		}
+		u.startActivity(fmt.Sprintf("scan %s · max %d hops", domain, d.maxHops.Value()), []activityStep{
+			{Label: "dns records", Enabled: true},
+			{Label: "expand nameservers", Enabled: opts.ExpandNS},
+			{Label: "subdomain brute force", Enabled: opts.BruteForce},
+			{Label: "reverse DNS (PTR)", Enabled: opts.PTR},
+			{Label: "/24 reverse sweep", Enabled: opts.Sweep24},
+			{Label: "services (SPF/DMARC/SRV)", Enabled: opts.Services},
+			{Label: "crawl pages & sitemaps", Enabled: opts.Crawl},
+			{Label: "trace targets", Enabled: true},
+			{Label: "auto-trace subdomains", Enabled: opts.AutoTrace},
+		})
 		go func() {
 			err := u.app.Scan(ScanRequest{Domain: domain, MaxHops: d.maxHops.Value(), Options: opts})
 			u.afterOp(err)

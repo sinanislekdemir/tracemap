@@ -14,7 +14,7 @@ import (
 // saveHistory snapshots the current traces into the history database.
 func (u *uiApp) saveHistory() {
 	if len(u.traces) == 0 {
-		u.status.ShowMessage("nothing to save")
+		u.status.ShowMessage("nothing to add to history")
 		return
 	}
 	kind := "trace"
@@ -45,10 +45,10 @@ func (u *uiApp) saveHistory() {
 		req.Traces = append(req.Traces, ht)
 	}
 	if _, err := u.app.SaveHistory(req); err != nil {
-		u.status.ShowMessage("save failed: " + err.Error())
+		u.status.ShowMessage("could not add to history: " + err.Error())
 		return
 	}
-	u.status.ShowMessage("saved to history")
+	u.status.ShowMessage("added results to history")
 }
 
 func geoToHistory(g *geolocator.GeoData) *history.Geo {

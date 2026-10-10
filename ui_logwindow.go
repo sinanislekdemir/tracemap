@@ -27,7 +27,7 @@ func newLogWindow(title string) *logWindow {
 	view := qt.NewQPlainTextEdit2()
 	view.SetReadOnly(true)
 	view.SetMaximumBlockCount(2000)
-	view.SetFont(monoFont())
+	applyTerminalStyle(view)
 	view.SetMinimumHeight(140)
 	dock.SetWidget(view.QWidget)
 	return &logWindow{dock: dock, view: view}

@@ -207,14 +207,22 @@ func (u *uiApp) openDomainDialog() {
 	d.win.Show()
 	d.win.Raise()
 
+	u.startActivity("domain analysis "+domain, []activityStep{
+		{Label: "registration (RDAP/WHOIS)", Enabled: true},
+		{Label: "dns checks", Enabled: true},
+		{Label: "web/tls checks", Enabled: true},
+	})
+
 	go func() {
 		report, err := u.app.AnalyzeDomain(domain)
 		mainthread.Start(func() {
 			if err != nil {
 				d.status.SetText("error: " + err.Error())
+				u.activityf("error", "  ! error: %s", err.Error())
 				return
 			}
 			d.populate(report)
+			u.activityf("ok", "  ✓ report ready · grade %s · score %d", report.Grade, report.Score)
 		})
 	}()
 }
@@ -353,6 +361,11 @@ func (u *uiApp) onDomainProgress(e DomainProgressEvent) {
 	if u.domainDlg != nil && u.domainDlg.status != nil {
 		u.domainDlg.status.SetText(e.Phase + ": " + e.Message)
 	}
+	key := "domain:" + e.Phase
+	if !u.seenPhases[key] {
+		u.seenPhases[key] = true
+		u.activityf("info", "  ▸ %s: %s", e.Phase, e.Message)
+	}
 }
 
 // ---- origin (unmask) ----
@@ -425,7 +438,7 @@ func (u *uiApp) openOriginDialog() {
 	d.log = qt.NewQPlainTextEdit2()
 	d.log.SetReadOnly(true)
 	d.log.SetMaximumBlockCount(4000)
-	d.log.SetFont(monoFont())
+	applyTerminalStyle(d.log)
 	d.tabs.AddTab(d.log.QWidget, "Live log")
 
 	v.AddWidget2(d.tabs.QWidget, 1)
@@ -452,15 +465,22 @@ func (u *uiApp) openOriginDialog() {
 	d.win.Raise()
 
 	customRules := d.custom.IsChecked()
+	u.startActivity("unmask "+domain, []activityStep{
+		{Label: "build candidates", Enabled: true},
+		{Label: "verify candidates", Enabled: true},
+		{Label: "compare against proxied baseline", Enabled: true},
+	})
 	go func() {
 		report, err := u.app.UnmaskTarget(domain, customRules)
 		mainthread.Start(func() {
 			if err != nil {
 				d.log.AppendPlainText("error: " + err.Error())
+				u.activityf("error", "  ! error: %s", err.Error())
 				return
 			}
 			d.populate(report)
 			u.addOriginMarkers(report)
+			u.activityf("ok", "  ✓ complete")
 		})
 	}()
 }
@@ -609,6 +629,11 @@ func (u *uiApp) onOriginProgress(e OriginProgressEvent) {
 	if u.originDlg != nil && u.originDlg.log != nil {
 		u.originDlg.log.AppendPlainText(fmt.Sprintf("%s: %s", e.Phase, e.Message))
 	}
+	key := "origin:" + e.Phase
+	if !u.seenPhases[key] {
+		u.seenPhases[key] = true
+		u.activityf("info", "  ▸ %s: %s", e.Phase, e.Message)
+	}
 }
 
 func (u *uiApp) onOriginLog(e OriginLogEvent) {
@@ -733,7 +758,7 @@ func (u *uiApp) openEndpointDialog() {
 	d.log = qt.NewQPlainTextEdit2()
 	d.log.SetReadOnly(true)
 	d.log.SetMaximumBlockCount(4000)
-	d.log.SetFont(monoFont())
+	applyTerminalStyle(d.log)
 	d.tabs.AddTab(d.log.QWidget, "Log")
 
 	split.AddWidget(d.tabs.QWidget)
@@ -1279,6 +1304,7 @@ func (u *uiApp) openIPBlocksDialog() {
 	d.blocks = qt.NewQPlainTextEdit2()
 	d.blocks.SetReadOnly(true)
 	d.blocks.SetMaximumBlockCount(2000)
+	applyTerminalStyle(d.blocks)
 	split.AddWidget(d.blocks.QWidget)
 	split.SetSizes([]int{280, 520})
 	split.SetStretchFactor(0, 0)

@@ -40,3 +40,20 @@ func monoFont() *qt.QFont {
 	})
 	return monoVal
 }
+
+// terminalStyle paints a console-like pane as an old phosphor terminal: a black
+// background with lime-green text and a green selection highlight.
+const terminalStyle = "QPlainTextEdit {" +
+	"background-color: #000000;" +
+	"color: #33ff33;" +
+	"selection-background-color: #123f12;" +
+	"selection-color: #d8ffd8;" +
+	"}"
+
+// applyTerminalStyle gives a plain-text pane the shared terminal look: the
+// monospace "techy" font plus the black/lime palette. Every console-like pane
+// calls this so the logs, netcat sessions and tool logs read alike.
+func applyTerminalStyle(view *qt.QPlainTextEdit) {
+	view.SetFont(monoFont())
+	view.SetStyleSheet(terminalStyle)
+}

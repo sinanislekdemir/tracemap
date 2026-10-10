@@ -141,7 +141,7 @@ func (d *portDialog) build(host, label string) {
 	d.activity = qt.NewQPlainTextEdit2()
 	d.activity.SetReadOnly(true)
 	d.activity.SetMaximumBlockCount(2000)
-	d.activity.SetFont(monoFont())
+	applyTerminalStyle(d.activity)
 	d.activity.SetMaximumHeight(140)
 	v.AddWidget(d.activity.QWidget)
 }
@@ -182,6 +182,10 @@ func (d *portDialog) start() {
 	d.opens = nil
 	d.activity.AppendPlainText(fmt.Sprintf("scanning %s (%s/%s)…", d.describeScope(), req.Protocol, req.Preset))
 	d.u.startOp("portscan " + d.target)
+	d.u.startActivity(fmt.Sprintf("port scan %s", d.describeScope()), []activityStep{
+		{Label: "probe ports", Enabled: true},
+		{Label: "identify services", Enabled: d.probe.IsChecked()},
+	})
 	go func() {
 		if err := d.u.app.ScanPorts(req); err != nil {
 			mainthread.Start(func() { d.u.status.ShowMessage(err.Error()) })

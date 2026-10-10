@@ -133,6 +133,7 @@ func (d *portDialog) build(host, label string) {
 	d.table = qt.NewQTreeWidget2()
 	d.table.SetColumnCount(5)
 	d.table.SetHeaderLabels([]string{"Host", "Port", "Proto", "Service", "Detail"})
+	d.table.SetSelectionMode(qt.QAbstractItemView__ExtendedSelection)
 	d.table.OnItemDoubleClicked(func(item *qt.QTreeWidgetItem, col int) { d.openNetcat(item) })
 	d.table.SetContextMenuPolicy(qt.CustomContextMenu)
 	d.table.OnCustomContextMenuRequested(func(pos *qt.QPoint) { d.resultMenu(pos) })
@@ -418,19 +419,73 @@ func (d *portDialog) resultMenu(pos *qt.QPoint) {
 	if !ok {
 		return
 	}
+	if item != nil {
+		d.table.SetCurrentItem(item)
+	}
 	menu := qt.NewQMenu2()
 	// Web services get a browser shortcut (QDesktopServices uses the platform
-	// default handler on Linux, macOS and Windows).
+	// default handler on Linux, macOS and Windows) and a scrape action.
 	if url, ok := ev.Result.WebURL(ev.Host); ok {
 		addMenuAction(menu, "Open in browser", func() {
 			qt.QDesktopServices_OpenUrl(qt.NewQUrl3(url))
 		})
+		addMenuAction(menu, "Scrape this host…", func() { d.scrapeSelection([]PortOpenEvent{ev}) })
+	}
+	if selected := d.selectedWebResults(); len(selected) > 1 {
+		addMenuAction(menu, fmt.Sprintf("Scrape %d selected web services…", len(selected)),
+			func() { d.scrapeSelection(selected) })
 	}
 	addMenuAction(menu, "Netcat…", func() { d.u.openNetcatFor(ev.Host, ev.Result.Port, ev.Result.TLS) })
 	addMenuAction(menu, "Trace this host", func() { d.u.traceHost(ev.Host) })
 	addMenuAction(menu, "Copy IP", func() { qt.QGuiApplication_Clipboard().SetText(ev.Host) })
 	gp := d.table.MapToGlobal(qt.NewQPointF3(float64(pos.X()), float64(pos.Y())))
 	menu.ExecWithPos(qt.NewQPoint2(int(gp.X()), int(gp.Y())))
+}
+
+// selectedWebResults returns the selected rows whose open port is a web
+// service, for a multi-target scrape.
+func (d *portDialog) selectedWebResults() []PortOpenEvent {
+	items := d.table.SelectedItems()
+	out := make([]PortOpenEvent, 0, len(items))
+	for _, item := range items {
+		idx := d.table.IndexOfTopLevelItem(item)
+		if idx < 0 || idx >= len(d.opens) {
+			continue
+		}
+		ev := d.opens[idx]
+		if _, ok := ev.Result.WebURL(ev.Host); ok {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// scrapeSelection opens the scrape window for the given web-service results.
+func (d *portDialog) scrapeSelection(evs []PortOpenEvent) {
+	targets := make([]ScrapeTarget, 0, len(evs))
+	for _, ev := range evs {
+		url, ok := ev.Result.WebURL(ev.Host)
+		if !ok {
+			continue
+		}
+		label := ev.Label
+		if label == "" {
+			label = ev.Host
+		}
+		targets = append(targets, ScrapeTarget{
+			Label: fmt.Sprintf("%s:%d", label, ev.Result.Port),
+			URL:   url,
+		})
+	}
+	if len(targets) == 0 {
+		d.u.status.ShowMessage("no web services selected")
+		return
+	}
+	caption := "port scan result"
+	if len(targets) > 1 {
+		caption = fmt.Sprintf("%d port scan results", len(targets))
+	}
+	d.u.openScrapeFor(targets, caption)
 }
 
 func (u *uiApp) onPortOpen(ev PortOpenEvent) {

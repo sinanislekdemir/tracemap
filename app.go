@@ -26,6 +26,7 @@ import (
 	"traceroute/internal/netutil"
 	"traceroute/internal/origin"
 	"traceroute/internal/portscan"
+	"traceroute/internal/scrape"
 	"traceroute/internal/subdomains"
 	"traceroute/internal/tracerouter"
 	"traceroute/internal/webcrawl"
@@ -63,6 +64,13 @@ const (
 	EventHTTPResult       = "http:result"
 	EventBlockLog         = "block:log"
 	EventIPBlocksProgress = "ipblocks:progress"
+	EventScrapePage       = "scrape:page"
+	EventScrapeAsset      = "scrape:asset"
+	EventScrapeLeak       = "scrape:leak"
+	EventScrapeProgress   = "scrape:progress"
+	EventScrapeLog        = "scrape:log"
+	EventScrapeDone       = "scrape:done"
+	EventScrapeError      = "scrape:error"
 )
 
 // scanConcurrency limits how many traces an advanced scan runs at once.
@@ -439,6 +447,7 @@ type App struct {
 	domain  *domaincheck.Analyzer
 	hs      *hostscan.Scanner
 	ipb     *ipblocks.DB
+	scrape  *scrape.Store
 
 	// Each independent operation family owns a canceler so a run cannot
 	// accidentally clear a newer run's cancellation handle.
@@ -448,6 +457,7 @@ type App struct {
 	originOps canceler
 	httpOps   canceler
 	ipbOps    canceler
+	scrapeOps canceler
 }
 
 // NewApp creates the application backend.
@@ -498,6 +508,20 @@ func NewApp() *App {
 		log.Printf("ipblocks: %s", db.Path())
 	}
 
+	if dataDir := appdata.DataDir(); dataDir != "" {
+		scrapeStore, err := scrape.Open(
+			filepath.Join(dataDir, appdata.ScrapeDBName),
+			filepath.Join(dataDir, "scrape"),
+		)
+		switch {
+		case err != nil:
+			log.Printf("scrape: unavailable: %v", err)
+		case scrapeStore != nil:
+			app.scrape = scrapeStore
+			log.Printf("scrape: %s", scrapeStore.Path())
+		}
+	}
+
 	return app
 }
 
@@ -511,6 +535,7 @@ func (a *App) shutdown(ctx context.Context) {
 	_ = a.geo.Close()
 	_ = a.hist.Close()
 	_ = a.subs.Close()
+	_ = a.scrape.Close()
 	if a.ipb != nil {
 		_ = a.ipb.Close()
 	}

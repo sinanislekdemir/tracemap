@@ -68,6 +68,7 @@ copyright line on a new release year:
 ```
 main.go                     Qt entry: LockOSThread, QApplication, load world, run UI
 app.go                      App struct + backend methods (Trace/Scan/ScanPorts/Net*/AnalyzeDomain/ExportDomainReport/Cancel/History/PickWordlist), event DTOs
+scrape_app.go               scrape backend methods + scrape:* event DTOs
 cancel.go                   shared cancellable-operation primitive
 emit.go                     EventSink + Dialogs interfaces (toolkit-agnostic)
 ui_app.go                   uiApp controller: main window, toolbar, sidebar, status bar, event dispatch, map model
@@ -76,6 +77,8 @@ ui_logwindow.go             docked per-channel log panes (console/dns/subdomains
 ui_dialogs.go               native Qt Dialogs (QFileDialog/QMessageBox) for the backend
 ui_scan.go                  advanced-scan options window
 ui_port.go                  port-scan window (options + results table + activity)
+ui_scrape.go                scrape run window (options + live pages/media/log)
+ui_scrape_index.go          scrape index browser (job picker + pages/media/search)
 ui_tools.go                 domain / unmask / endpoint / GeoIP cache / country-blocks windows
 ui_netcat.go                floating interactive TCP sessions
 ui_about.go                 About window (version, author, license) + Help ▾
@@ -89,12 +92,13 @@ internal/dnscheck/          A/AAAA/CNAME/MX/NS lookup -> trace targets
 internal/domaincheck/       domain security report (RDAP/WHOIS, DNS, email auth, web/TLS)
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/webcrawl/          browser-UA HTTP crawl (frontpage + 1 level, robots, sitemap)
+internal/scrape/            website scraper/archiver + FTS5 search store (scrape.db)
 internal/hostscan/          IPv4 CIDR enumeration + live-host discovery (TCP connect)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing + worker pool
 internal/origin/            keyless origin discovery behind CDNs/proxies ("unmask")
 internal/netcat/            interactive TCP sessions ("nc") for floating windows
 internal/history/           saved traces/scans (SQLite snapshot store)
-internal/appdata/           shared SQLite database path (tracemap.db)
+internal/appdata/           shared SQLite database path (tracemap.db) + scrape data dir
 internal/netutil/           shared host normalization/resolution/IP/dedup helpers
 internal/httputil/          shared browser User-Agent
 internal/sqliteutil/        shared SQLite open/pragmas/schema helper
@@ -154,7 +158,11 @@ LICENSES/                   full LGPL-3.0 / GPL-3.0 texts (shipped + embedded)
   on Windows), so it is independent of where the binary runs. Env override
   `TRACEROUTE_DB` (`off` disables all persistence). GeoLite2 paths:
   `TRACEROUTE_GEOIP_CITY_DB`, `TRACEROUTE_GEOIP_ASN_DB`,
-  `TRACEROUTE_GEOIP_DIR`.
+  `TRACEROUTE_GEOIP_DIR`. The scrape archive is separate: `appdata.DataDir()`
+  returns the per-user data directory (`$XDG_DATA_HOME/traceroute`,
+  `~/Library/Application Support/traceroute`, `%LocalAppData%\traceroute`), env
+  override `TRACEROUTE_DATA` (`off` disables scraping). It holds `scrape.db` and
+  the downloaded media under `scrape/`.
 - **Subdomain discovery** (`internal/subdomains`): local-DNS only. `Discover`
   detects wildcards, brute-forces the embedded 1000+-name `Wordlist`, reverse-
   resolves discovered IPs (optionally sweeping `/24`s), and extracts hosts from
@@ -193,6 +201,68 @@ LICENSES/                   full LGPL-3.0 / GPL-3.0 texts (shipped + embedded)
   and `scan:crawl` with the final `Result`, and merges crawl-discovered hostnames
   into the subdomain list as `source:"crawl"` (persisted via `subdomains.Store`,
   so AutoTrace and the review UI treat them like DNS hits).
+- **Scrape / archive** (`internal/scrape`): a pure-Go website scraper/archiver
+  (no goscrapy, no external tools — `net/http` + `x/net/html` plus the shared
+  `httputil`/`ratelimit`/`netutil` helpers). `Run(ctx, Options)` follows
+  same-site links from one or more seeds by BFS to a configurable `Depth`, with a
+  locked `MaxPages`/`MaxAssets`/`MaxBytes` budget and bounded concurrency.
+  `MaxPages` bounds *indexed* pages strictly: a page rejected by the keyword
+  filter is fetched for traversal but never counts, and `reservePage` (a
+  compare-and-swap reservation) prevents concurrent fetches from overshooting
+  the cap. The
+  **base domain of every seed is fixed when the crawl starts and can never
+  change**: each seed's registrable domain is computed once (`baseDomain`, with a
+  multi-part public-suffix table), link following is restricted to the `host` or
+  `site` scope (both subsets of the base domain) and a redirect that leaves the
+  base domain is refused by the page client's `CheckRedirect`
+  (`errOutOfDomain`); referenced subresources may live on a CDN, since assets are
+  attachments, not the crawl frontier (the asset client does not enforce the
+  domain). `Mode` selects what is downloaded (`html`, `html+images`,
+  `html+media`). Documents yield metadata (title/description/keywords/`og:*`,
+  `lang`, canonical), visible text, and links; assets are content-addressed by
+  SHA-256. **Keyword filtering** (`Options.Keywords`/`KeywordMatch`, case-
+  insensitive `any`/`all`) gates *storage* only: a page without a keyword is not
+  stored and gets no assets, but traversal continues through it so deeper
+  matches are still reached. The **directory index test** (`Options.IndexTest`,
+  on by default in the UI) probes every fetched page's directory and each
+  ancestor (`directoryURLs`, deduped across the crawl) and flags responses whose
+  title/heading is an autoindex listing (`analyzeIndex`: "Index of …" /
+  "Directory listing …", with a `sameDirectory` redirect guard to avoid
+  misattributing a homepage), reporting them through `OnLeak` and storing them
+  in `scrape_leak` (surfaced in the run and index windows' **Leaks** tab).
+  `Options.Delay`/`DelayEvery` add a burst throttle (`throttle.wait`: after every
+  `DelayEvery` requests the whole crawl cools down for `Delay`), and
+  `Options.UserAgent` picks the client identity (the UI offers the
+  `internal/httputil` Chrome/Firefox/Edge/curl strings; empty falls back to
+  `BrowserUserAgent`). `Options.IgnoreTLSErrors` accepts invalid or self-signed
+  certificates via `insecureTransport`, which clones the transport and sets
+  `InsecureSkipVerify` (never mutating the process default). `Store` persists
+  every job, page and asset in a
+  dedicated `scrape.db` with **FTS5** external-content indexes (`page_fts` over
+  title/meta/url/text/html, `asset_fts` over url/filename; kept in sync by
+  insert/delete triggers) and writes asset bodies under `scrape/job-<id>/`.
+  `Store.Search` maps the UI's field selector to an FTS column filter
+  (`title:`, `meta:`, `url:`, `text:`, `html:`, `filename:`) with `bm25()`
+  ranking and `snippet()` previews; FTS5 tokenizes case-insensitively, matching
+  the keyword filter. Backend methods live in `scrape_app.go`: `App.Scrape`
+  (streams `scrape:page`/`scrape:asset`/`scrape:progress`/`scrape:log` and ends
+  with `scrape:done`/`scrape:error`), `App.CancelScrape` (own `scrapeOps`
+  canceler), `ListScrapeJobs`/`ListScrapePages`/`ListScrapeAssets`,
+  `SearchScrape`, `LoadScrapePage`, `OpenScrapeAsset`, `DeleteScrapeJob` and
+  `ExportScrapeReport`. The UI is a **Tools ▸ Scrape** submenu: **Scrape
+  address…** (the toolbar target), **Scrape scan targets…** (the last scan's
+  `scanTargets`) and **Browse index…** (the archive browser). Targets also come
+  from the port-scan results context menu (**Scrape this host…** / multi-select
+  **Scrape N selected web services…**, using `Result.WebURL`). `ui_scrape.go` is
+  the *run* window (options + live Pages/Assets/Log for the run): a **Scheme**
+  selector (`http`/`https`, optionally `www.`) and a **Port** spinbox (0 =
+  scheme default) compose the URL (`composeScrapeURL`), pre-filled from a
+  port-scan result (`parseScrapeTarget`) and editable for a single target. A
+  target that already carries a URL keeps its own scheme/port. CIDR blocks are
+  rejected — a scrape target is a host or URL, not a CIDR. Browsing and
+  searching stored jobs is the separate `ui_scrape_index.go` window (job picker
+  with a live description, Pages/Assets with image preview, and the field-scoped
+  Search tab; **Delete job** removes a job and its archive directory).
 - **Port scanning** (`internal/portscan`): pure-Go, no nmap. `App.ScanPorts`
   expands a preset (`top20`/`top100`/`top1000`) or a `ParsePorts` range into a
   port list, then `Scanner.Scan` probes with bounded concurrency, randomised
@@ -428,6 +498,12 @@ LICENSES/                   full LGPL-3.0 / GPL-3.0 texts (shipped + embedded)
   dialer; no external network.
 - `webcrawl` tests serve fixtures from an `httptest.Server` and dial it with a
   custom transport (plus a fake resolver); no external network.
+- `scrape` tests serve fixtures from an `httptest.Server` for depth/mode/keyword
+  behaviour and use a recording fake transport to assert the locked base domain
+  (out-of-domain links and redirects are never fetched). Store tests use a temp
+  SQLite file and temp archive dir and exercise the per-field FTS queries; an
+  app-level test drives `App.Scrape` end to end with `TRACEROUTE_DATA` pointed at
+  a temp dir. No external network.
 - `portscan` tests scan localhost listeners and `httptest` HTTP/TLS servers; no
   external network. `Scanner.DialContext`/`ResolveIP` can be faked. The worker
   pool is tested with a blocking fake dialer: `pool_test.go` asserts the

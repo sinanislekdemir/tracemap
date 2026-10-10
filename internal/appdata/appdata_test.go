@@ -36,3 +36,23 @@ func TestDefaultPathIsUnderHomeConfig(t *testing.T) {
 		t.Errorf("DefaultPath = %q, want %q", got, want)
 	}
 }
+
+func TestDataDirEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TRACEROUTE_DATA", dir)
+	if got := DataDir(); got != dir {
+		t.Errorf("DataDir = %q, want %q", got, dir)
+	}
+
+	t.Setenv("TRACEROUTE_DATA", "off")
+	if got := DataDir(); got != "" {
+		t.Errorf("DataDir = %q, want empty when disabled", got)
+	}
+}
+
+func TestDataDirDefaultEndsWithName(t *testing.T) {
+	t.Setenv("TRACEROUTE_DATA", "")
+	if got := DataDir(); got != "" && filepath.Base(got) != "traceroute" {
+		t.Errorf("DataDir = %q, want it to end in traceroute", got)
+	}
+}

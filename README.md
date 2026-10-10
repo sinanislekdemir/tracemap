@@ -49,6 +49,32 @@ highlighted as correlation points.*
   reads `robots.txt` and `sitemap.xml` (including sitemap indexes and gzipped
   sitemaps) and folds every in-domain hostname it finds into the subdomain list.
   Pure Go — no `curl`, `wget` or other external tools.
+- **Scrape / archive** — **Tools ▾ → Scrape** mirrors a site and indexes it for
+  offline search. **Scrape address…** runs on the target box,
+  **Scrape scan targets…** on the last scan's found hosts, and
+  **Browse index…** opens the archive browser. The run window has a **Scheme**
+  selector (`http`/`https`, optionally `www.`) and a **Port** field that stays
+  blank to use the scheme's default and is pre-filled when the scrape is started
+  from a port-scan result; CIDR blocks are rejected because a scrape target is a
+  host or URL. The **directory index test** (on by default) probes each page's
+  directory and its ancestors for accidental open directory listings (autoindex)
+  and lists any it finds in a **Leaks** tab. A **User agent** dropdown
+  (Chrome/Firefox/Edge/curl) sets the request identity, a **Throttle** control —
+  *wait N seconds every M requests* — paces the crawl, and **ignore TLS errors**
+  accepts invalid or self-signed certificates. Pick what to download (**html**,
+  **html+images** or **html+media**), how many link levels to follow (**depth**),
+  the link scope (**host** or **site**) and the page budget; the base domain of
+  each target is fixed for the whole run and is never changed, so the crawl can
+  never wander onto another site. Optionally give it **keywords** and only pages
+  whose text contains one (case-insensitive, all/any) are stored — non-matching
+  pages are still traversed so deeper matches are found. Pages, metadata, visible
+  text and the raw HTML are stored in a dedicated SQLite database with **full-text
+  search**, and images/media are saved to disk; a **Search** tab queries page
+  titles, metadata, URLs, content, full HTML and asset filenames separately, and
+  the **Assets** tab previews images and opens or reveals any file. Targets come
+  from the toolbar box, from a whole scan's found targets, or straight from the
+  port-scan results context menu (**Scrape this host…**, or select several web
+  services and **Scrape N selected…**).
 - **Port scanning** — right-click a target or hop and choose **Find open ports**.
   The pure-Go scanner (no nmap) does a TCP connect scan or best-effort UDP
   probe over common-port presets or a custom range, with randomised port order
@@ -298,6 +324,7 @@ below (the remembered GeoLite2 path).
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TRACEROUTE_DB` | `tracemap.db` | SQLite database holding the geo cache and history; `off` disables persistence. |
+| `TRACEROUTE_DATA` | per-user data dir | Directory holding the scrape archive (`scrape.db` + downloaded media); `off` disables scraping. |
 | `TRACEROUTE_GEOIP_COUNTRY_DB` | auto-detected | Path to `GeoLite2-Country.mmdb` (country IP blocks browser). |
 | `TRACEROUTE_GEOIP_CITY_DB` | auto-detected | Path to `GeoLite2-City.mmdb`. |
 | `TRACEROUTE_GEOIP_ASN_DB` | auto-detected | Path to `GeoLite2-ASN.mmdb`. |
@@ -309,6 +336,14 @@ The database lives in the per-user config directory:
 `%AppData%\traceroute\tracemap.db` on Windows. It contains three tables:
 `geo_cache` (geolocation replies), `history_entry` (saved traces/scans) and
 `subdomain` (discovered subdomains).
+
+The scrape archive is kept separately in the per-user data directory:
+`~/.local/share/traceroute/scrape.db` on Linux,
+`~/Library/Application Support/traceroute/scrape.db` on macOS and
+`%LocalAppData%\traceroute\scrape.db` on Windows, with downloaded media under a
+`scrape/` subdirectory. It is independent of the config database so a large
+archive can be deleted or backed up on its own; point it elsewhere (or disable
+scraping) with `TRACEROUTE_DATA`.
 
 Geolocation resolution order: in-memory cache → SQLite cache → `ipwho.is`
 (source of truth, throttled to 2 req/s) → local GeoLite2 `.mmdb` fallback.
@@ -377,6 +412,8 @@ ui_app.go / ui_model.go     Qt controller, sidebar, map model, correlation
 ui_logwindow.go             floating per-channel log windows
 ui_dialogs.go               native Qt dialogs for the backend
 ui_scan.go / ui_port.go     scan and port-scan windows
+ui_scrape.go                scrape run window (options + live pages/media/log)
+ui_scrape_index.go          scrape index browser (job picker + pages/media/search)
 ui_tools.go                 domain / unmask / endpoint / GeoIP cache / blocks
 ui_netcat.go                interactive TCP sessions
 internal/mapdata/           embedded Natural Earth basemap + Web Mercator
@@ -387,6 +424,7 @@ internal/dnscheck/          A/AAAA/CNAME/MX/NS/SOA lookup → trace targets
 internal/domaincheck/       domain security report (RDAP/WHOIS, DNS, email auth, web/TLS)
 internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV)
 internal/webcrawl/          browser-UA HTTP crawl (front page + 1 level, robots, sitemap)
+internal/scrape/            website scraper/archiver + FTS5 archive search (scrape.db)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
 internal/origin/            keyless origin discovery behind CDNs/proxies ("unmask")
 internal/netcat/            interactive TCP sessions (optional TLS)

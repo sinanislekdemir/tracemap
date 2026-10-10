@@ -31,6 +31,14 @@ offline world map (local vector borders + major cities).
   (pure-Go TCP connect / best-effort UDP, no nmap) over common-port presets or a
   custom range, with randomised order and jitter, optionally identifying the
   service via banner/HTTP/TLS probing.
+- **Scrape / archive**: mirror a site (depth, host/site scope, html / html+images
+  / html+media) into a local archive with full-text search over page titles,
+  metadata, URLs, content, full HTML and asset filenames. The base domain of every
+  target is fixed for the run and never changes. Optional case-insensitive keyword
+  filtering stores only matching pages (traversal continues through the rest).
+  Targets come from the toolbar box, the scan's found targets or the port-scan
+  results context menu. Pure Go; a dedicated `scrape.db` (FTS5) plus on-disk
+  media.
 - Cancel a running trace or scan.
 
 **Out of scope (v1)**

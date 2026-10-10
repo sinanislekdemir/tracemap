@@ -121,16 +121,18 @@ type uiApp struct {
 	channels map[string]*logWindow
 	logSeq   int
 
-	portDlg     *portDialog
-	domainDlg   *domainDialog
-	originDlg   *originDialog
-	endpointDlg *endpointDialog
-	geocacheDlg *geocacheDialog
-	ipblocksDlg *ipblocksDialog
-	historyDlg  *historyDialog
-	netcats     map[string]*netcatWindow
-	netcatEOL   int
-	popup       *qt.QWidget
+	portDlg        *portDialog
+	domainDlg      *domainDialog
+	originDlg      *originDialog
+	endpointDlg    *endpointDialog
+	geocacheDlg    *geocacheDialog
+	ipblocksDlg    *ipblocksDialog
+	historyDlg     *historyDialog
+	scrapeDlg      *scrapeDialog
+	scrapeIndexDlg *scrapeIndexDialog
+	netcats        map[string]*netcatWindow
+	netcatEOL      int
+	popup          *qt.QWidget
 
 	themeDark bool
 }
@@ -323,6 +325,11 @@ func (u *uiApp) buildMenuBar() {
 	addMenuAction(tools, "Domain analysis", func() { u.openDomainDialog() })
 	addMenuAction(tools, "Port scan", func() { u.openPortScanDialog() })
 	addMenuAction(tools, "Endpoint analysis", func() { u.openEndpointDialog() })
+	scrapeMenu := tools.AddMenuWithTitle("Scrape")
+	addMenuAction(scrapeMenu, "Scrape address…", func() { u.openScrapeAddress() })
+	addMenuAction(scrapeMenu, "Scrape scan targets…", func() { u.openScrapeScanTargets() })
+	scrapeMenu.AddSeparator()
+	addMenuAction(scrapeMenu, "Browse index…", func() { u.openScrapeIndex() })
 	addMenuAction(tools, "Netcat", func() { u.openNetcat() })
 	addMenuAction(tools, "Netcat cheatsheets", func() { u.openCheatsheet("") })
 	addMenuAction(tools, "GeoIP cache", func() { u.openGeoCacheDialog() })
@@ -349,6 +356,7 @@ var logChannels = []struct{ kind, title string }{
 	{"ports", "Ports"},
 	{"origin", "Origin"},
 	{"netcat", "Netcat"},
+	{"scrape", "Scrape"},
 }
 
 // buildWindowsMenu fills the Windows menu with quick access to the docked log
@@ -383,6 +391,19 @@ func (u *uiApp) buildWindowsMenu(menu *qt.QMenu) {
 	addMenuAction(menu, "Endpoint analysis", func() {
 		if u.endpointDlg == nil || !raiseDialog(u.endpointDlg.win) {
 			u.openEndpointDialog()
+		}
+	})
+	scrapeMenu := menu.AddMenuWithTitle("Scrape")
+	addMenuAction(scrapeMenu, "Scrape address…", func() {
+		if u.scrapeDlg == nil || !raiseDialog(u.scrapeDlg.win) {
+			u.openScrapeAddress()
+		}
+	})
+	addMenuAction(scrapeMenu, "Scrape scan targets…", func() { u.openScrapeScanTargets() })
+	scrapeMenu.AddSeparator()
+	addMenuAction(scrapeMenu, "Browse index…", func() {
+		if u.scrapeIndexDlg == nil || !raiseDialog(u.scrapeIndexDlg.win) {
+			u.openScrapeIndex()
 		}
 	})
 	addMenuAction(menu, "Netcat", func() { u.openNetcat() })
@@ -768,7 +789,7 @@ func (u *uiApp) resetForOperation() {
 	if u.unmaskAction != nil {
 		u.unmaskAction.SetEnabled(false)
 	}
-	for _, id := range []string{"activity", "dns", "subdomains", "crawl", "trace", "ports", "origin"} {
+	for _, id := range []string{"activity", "dns", "subdomains", "crawl", "trace", "ports", "origin", "scrape"} {
 		if w := u.channels[id]; w != nil {
 			w.clear()
 		}
@@ -784,6 +805,7 @@ func (u *uiApp) clean() {
 	// Stop anything in flight so late events cannot repopulate the view.
 	u.app.Cancel()
 	u.app.CancelPortScan()
+	u.app.CancelScrape()
 	u.finishOp()
 
 	u.resetForOperation()
@@ -971,6 +993,36 @@ func (u *uiApp) handle(name string, payload any) {
 	case EventIPBlocksProgress:
 		e := payload.(IPBlocksProgressEvent)
 		u.onIPBlocksProgress(e)
+	case EventScrapePage:
+		u.onScrapePage(payload.(ScrapePageEvent))
+	case EventScrapeAsset:
+		u.onScrapeAsset(payload.(ScrapeAssetEvent))
+	case EventScrapeLeak:
+		u.onScrapeLeak(payload.(ScrapeLeakEvent))
+	case EventScrapeProgress:
+		e := payload.(ScrapeProgressEvent)
+		u.status.ShowMessage(fmt.Sprintf("scrape · %d pages, %d assets, %s", e.Pages, e.Assets, formatBytes(e.Bytes)))
+	case EventScrapeLog:
+		e := payload.(CrawlLogEvent)
+		u.logLine("scrape", e.Level, e.Message)
+		if u.scrapeDlg != nil {
+			u.scrapeDlg.appendLog(e.Level, e.Message)
+		}
+	case EventScrapeDone:
+		e := payload.(ScrapeDoneEvent)
+		u.status.ShowMessage(fmt.Sprintf("scrape done · %d pages, %d assets", e.Pages, e.Assets))
+		if u.scrapeDlg != nil {
+			u.scrapeDlg.onDone(e)
+		}
+		u.finishOp()
+	case EventScrapeError:
+		e := payload.(ErrorEvent)
+		u.status.ShowMessage(e.Message)
+		u.logLine("scrape", "error", e.Message)
+		if u.scrapeDlg != nil {
+			u.scrapeDlg.finish("error")
+		}
+		u.finishOp()
 	}
 }
 

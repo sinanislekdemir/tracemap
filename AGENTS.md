@@ -39,9 +39,9 @@ the Windows zip.
 - Never skip ahead to a new minor while the current minor still has patch room,
   unless the user explicitly specifies the exact version to tag.
 
-> Note: `v0.3.0` was tagged before this rule existed and should have been
-> `v0.2.1`. It stays as-is (the release already ran); the next release is
-> `v0.3.1`.
+> Note: `v1.0.0` was an explicit major release after `v0.5.2`; from there the
+> patch-first rule applies. The latest release is `v1.0.3`, so the next patch is
+> `v1.0.4`.
 
 ### License & notices
 

@@ -27,6 +27,7 @@ type portDialog struct {
 	concurrency *qt.QSpinBox
 	timeout     *qt.QSpinBox
 	probe       *qt.QCheckBox
+	pingFirst   *qt.QCheckBox
 	table       *qt.QTreeWidget
 	activity    *qt.QPlainTextEdit
 	open        int
@@ -116,6 +117,9 @@ func (d *portDialog) build(host, label string) {
 	d.probe = qt.NewQCheckBox3("Identify services (banner/HTTP/TLS)")
 	d.probe.SetChecked(true)
 	form.AddRow3("", d.probe.QWidget)
+
+	d.pingFirst = qt.NewQCheckBox3("Ping first (skip hosts that do not answer ICMP)")
+	form.AddRow3("", d.pingFirst.QWidget)
 	v.AddLayout(form.QLayout)
 
 	start := newButton("Start", func() { d.start() })
@@ -156,6 +160,7 @@ func (d *portDialog) start() {
 		Concurrency: d.concurrency.Value(),
 		TimeoutMs:   d.timeout.Value(),
 		Probe:       d.probe.IsChecked(),
+		PingFirst:   d.pingFirst.IsChecked(),
 	}
 	switch {
 	case d.cidr != "":
@@ -183,10 +188,15 @@ func (d *portDialog) start() {
 	d.opens = nil
 	d.activity.AppendPlainText(fmt.Sprintf("scanning %s (%s/%s)…", d.describeScope(), req.Protocol, req.Preset))
 	d.u.startOp("portscan " + d.target)
-	d.u.startActivity(fmt.Sprintf("port scan %s", d.describeScope()), []activityStep{
-		{Label: "probe ports", Enabled: true},
-		{Label: "identify services", Enabled: d.probe.IsChecked()},
-	})
+	steps := make([]activityStep, 0, 3)
+	if req.PingFirst {
+		steps = append(steps, activityStep{Label: "ping targets (ICMP)", Enabled: true})
+	}
+	steps = append(steps,
+		activityStep{Label: "probe ports", Enabled: true},
+		activityStep{Label: "identify services", Enabled: d.probe.IsChecked()},
+	)
+	d.u.startActivity(fmt.Sprintf("port scan %s", d.describeScope()), steps)
 	go func() {
 		if err := d.u.app.ScanPorts(req); err != nil {
 			mainthread.Start(func() { d.u.status.ShowMessage(err.Error()) })
@@ -201,7 +211,16 @@ func (d *portDialog) finish(e PortScanDoneEvent) {
 	if e.Targets > 0 {
 		d.targets = e.Targets
 	}
-	d.activity.AppendPlainText(fmt.Sprintf("done · %d open across %d target(s)", e.Open, d.targets))
+	line := fmt.Sprintf("done · %d open across %d target(s)", e.Open, d.targets)
+	if e.Skipped > 0 {
+		line += fmt.Sprintf(" · %d skipped (no ICMP reply)", e.Skipped)
+	}
+	d.activity.AppendPlainText(line)
+}
+
+// log appends a verbose scan step (for example a host skipped by ping first).
+func (d *portDialog) log(e PortScanLogEvent) {
+	d.activity.AppendPlainText(e.Message)
 }
 
 // fail records an aborted scan in the activity log.
@@ -237,6 +256,7 @@ func (d *portDialog) exportReport() {
 		Ports:       ports,
 		PortCount:   portCount(req),
 		Probe:       req.Probe,
+		PingFirst:   req.PingFirst,
 		Concurrency: req.Concurrency,
 		TimeoutMs:   req.TimeoutMs,
 		Scanned:     d.scanned,

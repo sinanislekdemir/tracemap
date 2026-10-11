@@ -25,6 +25,7 @@ import (
 	"traceroute/internal/netcat"
 	"traceroute/internal/netutil"
 	"traceroute/internal/origin"
+	"traceroute/internal/ping"
 	"traceroute/internal/portscan"
 	"traceroute/internal/scrape"
 	"traceroute/internal/subdomains"
@@ -53,6 +54,7 @@ const (
 	EventPortProgress     = "portscan:progress"
 	EventPortDone         = "portscan:done"
 	EventPortError        = "portscan:error"
+	EventPortLog          = "portscan:log"
 	EventNetData          = "net:data"
 	EventNetClosed        = "net:closed"
 	EventNetError         = "net:error"
@@ -159,6 +161,13 @@ type CrawlLogEvent struct {
 	Message string `json:"message"`
 }
 
+// PortScanLogEvent is a verbose port-scan step (for example a host skipped by
+// the optional ping-first check), so the UI can show what was tried.
+type PortScanLogEvent struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
+}
+
 // PortScanTarget identifies one host in a multi-target port scan. Label is a
 // human-friendly name (e.g. the scan target's hostname) shown beside the host.
 type PortScanTarget struct {
@@ -180,6 +189,9 @@ type PortScanRequest struct {
 	Concurrency int              `json:"concurrency"`
 	TimeoutMs   int              `json:"timeoutMs"`
 	Probe       bool             `json:"probe"`
+	// PingFirst pings each target with ICMP before scanning and skips the ones
+	// that do not answer. It is opt-in because a live host may block ICMP.
+	PingFirst bool `json:"pingFirst"`
 }
 
 // PortOpenEvent reports one open port together with the target it belongs to.
@@ -206,6 +218,8 @@ type PortScanDoneEvent struct {
 	Scanned int    `json:"scanned"`
 	Open    int    `json:"open"`
 	Targets int    `json:"targets"`
+	// Skipped counts targets dropped by the optional ping-first check.
+	Skipped int `json:"skipped,omitempty"`
 }
 
 // PortScanRow is one open port in an exported port-scan report.
@@ -242,6 +256,7 @@ type PortScanReport struct {
 	Ports           string               `json:"ports"`
 	PortCount       int                  `json:"portCount"`
 	Probe           bool                 `json:"probe"`
+	PingFirst       bool                 `json:"pingFirst"`
 	Concurrency     int                  `json:"concurrency"`
 	TimeoutMs       int                  `json:"timeoutMs"`
 	Scanned         int                  `json:"scanned"`
@@ -449,6 +464,10 @@ type App struct {
 	ipb     *ipblocks.DB
 	scrape  *scrape.Store
 
+	// newPinger opens an ICMP prober for a ping-first port scan. It is a field
+	// so tests can substitute a fake.
+	newPinger func() (hostPinger, error)
+
 	// Each independent operation family owns a canceler so a run cannot
 	// accidentally clear a newer run's cancellation handle.
 	ops       canceler
@@ -458,6 +477,13 @@ type App struct {
 	httpOps   canceler
 	ipbOps    canceler
 	scrapeOps canceler
+}
+
+// hostPinger reports whether a host answers an ICMP echo. It is implemented by
+// *ping.Pinger and faked in tests.
+type hostPinger interface {
+	Ping(ctx context.Context, host string, timeout time.Duration) error
+	Close() error
 }
 
 // NewApp creates the application backend.
@@ -472,6 +498,7 @@ func NewApp() *App {
 		domain:  domaincheck.NewAnalyzer(),
 		hs:      hostscan.NewScanner(),
 	}
+	app.newPinger = func() (hostPinger, error) { return ping.Open() }
 
 	store, err := history.Open(appdata.DefaultPath())
 	switch {
@@ -936,6 +963,23 @@ func mergeSubdomainResults(base, extra []subdomains.Result) []subdomains.Result 
 // probes at once. Each target already fans out over its ports internally.
 const portScanHostConcurrency = 4
 
+// portPingConcurrency and portPingTimeout bound the optional ping-first sweep.
+// An echo is a single packet, so pings fan out far wider than port probes, and
+// the wait per host is capped well below the per-port timeout.
+const (
+	portPingConcurrency = 128
+	portPingTimeout     = 1500 * time.Millisecond
+)
+
+// pingTimeout chooses the per-host ICMP wait: the request's timeout when it is
+// reasonable, otherwise the default cap.
+func pingTimeout(requested time.Duration) time.Duration {
+	if requested <= 0 || requested > portPingTimeout {
+		return portPingTimeout
+	}
+	return requested
+}
+
 // portProbeBudget sizes the shared probe pool for one port-scan operation: up
 // to portScanHostConcurrency hosts probing with the request's per-host
 // concurrency, so the pool is the total number of probes in flight at once.
@@ -968,10 +1012,15 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 		Jitter:      portscan.DefaultJitter,
 	}
 
+	pinger := a.openHostPinger(req)
+	if pinger != nil {
+		defer pinger.Close()
+	}
+
 	if cidr := strings.TrimSpace(req.CIDR); cidr != "" {
 		pool := portscan.NewPool(a.ports, portProbeBudget(req.Concurrency))
 		defer pool.Close()
-		return a.scanPortBlock(ctx, pool, cidr, ports, opts)
+		return a.scanPortBlock(ctx, pool, cidr, ports, opts, pinger)
 	}
 
 	targets := normalizePortScanTargets(req)
@@ -979,6 +1028,24 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 		message := "no host to scan"
 		a.emit(EventPortError, ErrorEvent{Target: 0, Message: message})
 		return errors.New(message)
+	}
+
+	skipped := 0
+	if pinger != nil {
+		before := len(targets)
+		targets = a.pingTargets(ctx, pinger, targets, opts.Timeout)
+		skipped = before - len(targets)
+		a.emit(EventPortLog, PortScanLogEvent{Level: "info",
+			Message: fmt.Sprintf("ping first: %d/%d targets answered ICMP", len(targets), before)})
+		if len(targets) == 0 {
+			a.emit(EventPortDone, PortScanDoneEvent{
+				Host: req.Host, Scanned: len(ports), Open: 0, Targets: 0, Skipped: skipped,
+			})
+			return nil
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// One shared worker pool for the whole operation: every host draws on the
@@ -1036,17 +1103,18 @@ func (a *App) ScanPorts(req PortScanRequest) error {
 	}
 	a.emit(EventPortDone, PortScanDoneEvent{
 		Host: targets[0].Host, Scanned: len(ports), Open: int(atomic.LoadInt64(&open)),
-		Targets: len(targets),
+		Targets: len(targets), Skipped: skipped,
 	})
 	return nil
 }
 
 // scanPortBlock port-scans every usable host in an IPv4 CIDR block, streaming
-// open ports as portscan:open. It reports host-level progress (not per-port, to
-// keep the event stream bounded) through portscan:progress, using Target/Targets
-// for the host index/count and Done/Total for hosts completed. It ends with
-// portscan:done.
-func (a *App) scanPortBlock(ctx context.Context, pool *portscan.Pool, cidr string, ports []int, opts portscan.Options) error {
+// open ports as portscan:open. When a pinger is supplied it first checks which
+// hosts answer ICMP and scans only those, reporting the rest as skipped. It
+// reports host-level progress (not per-port, to keep the event stream bounded)
+// through portscan:progress, using Target/Targets for the host index/count and
+// Done/Total for hosts completed. It ends with portscan:done.
+func (a *App) scanPortBlock(ctx context.Context, pool *portscan.Pool, cidr string, ports []int, opts portscan.Options, pinger hostPinger) error {
 	network, ok := hostscan.ParseCIDR(cidr)
 	if !ok {
 		message := fmt.Sprintf("invalid IPv4 CIDR block %q", cidr)
@@ -1060,6 +1128,48 @@ func (a *App) scanPortBlock(ctx context.Context, pool *portscan.Pool, cidr strin
 		return errors.New(message)
 	}
 
+	iterate := func(fn func(string) bool) { hostscan.Each(network, fn) }
+	scanTotal := total
+	var skipped uint64
+	if pinger != nil {
+		live, checked := a.pingNetwork(ctx, pinger, network, opts.Timeout)
+		if checked > 0 {
+			skipped = checked - uint64(len(live))
+		}
+		a.emit(EventPortLog, PortScanLogEvent{Level: "info",
+			Message: fmt.Sprintf("ping first: %d/%d hosts in %s answered ICMP", len(live), total, cidr)})
+		if len(live) == 0 {
+			a.emit(EventPortDone, PortScanDoneEvent{
+				Host: cidr, Scanned: len(ports), Open: 0, Targets: 0, Skipped: int(skipped),
+			})
+			return nil
+		}
+		hosts := live
+		iterate = func(fn func(string) bool) {
+			for _, host := range hosts {
+				if !fn(host) {
+					return
+				}
+			}
+		}
+		scanTotal = uint64(len(hosts))
+	}
+
+	open, err := a.scanHosts(ctx, pool, iterate, scanTotal, opts)
+	if err != nil {
+		a.emit(EventPortError, ErrorEvent{Target: 0, Message: err.Error()})
+		return err
+	}
+	a.emit(EventPortDone, PortScanDoneEvent{
+		Host: cidr, Scanned: len(ports), Open: open,
+		Targets: int(scanTotal), Skipped: int(skipped),
+	})
+	return nil
+}
+
+// scanHosts probes every host yielded by iterate on a shared pool, streaming
+// open ports and host-level progress, and returns the number of open ports.
+func (a *App) scanHosts(ctx context.Context, pool *portscan.Pool, iterate func(func(string) bool), total uint64, opts portscan.Options) (int, error) {
 	var (
 		open      int64
 		completed uint64
@@ -1069,7 +1179,7 @@ func (a *App) scanPortBlock(ctx context.Context, pool *portscan.Pool, cidr strin
 	sem := make(chan struct{}, portScanHostConcurrency)
 	var wg sync.WaitGroup
 
-	hostscan.Each(network, func(host string) bool {
+	iterate(func(host string) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -1109,15 +1219,138 @@ func (a *App) scanPortBlock(ctx context.Context, pool *portscan.Pool, cidr strin
 	})
 	wg.Wait()
 
-	if scanErr != nil {
-		a.emit(EventPortError, ErrorEvent{Target: 0, Message: scanErr.Error()})
-		return scanErr
+	return int(atomic.LoadInt64(&open)), scanErr
+}
+
+// openHostPinger opens an ICMP prober when the request asks to ping first. It
+// returns nil (with a log line) when the check is disabled or ICMP is
+// unavailable, so the scan still runs: ICMP is optional because a live host may
+// not answer it.
+func (a *App) openHostPinger(req PortScanRequest) hostPinger {
+	if !req.PingFirst {
+		return nil
 	}
-	a.emit(EventPortDone, PortScanDoneEvent{
-		Host: cidr, Scanned: len(ports), Open: int(atomic.LoadInt64(&open)),
-		Targets: int(total),
+	open := a.newPinger
+	if open == nil {
+		open = func() (hostPinger, error) { return ping.Open() }
+	}
+	pinger, err := open()
+	if err != nil {
+		a.emit(EventPortLog, PortScanLogEvent{Level: "warn",
+			Message: "ping first unavailable (" + err.Error() + "); scanning every target"})
+		return nil
+	}
+	a.emit(EventPortLog, PortScanLogEvent{Level: "info", Message: "ping first: verifying targets with ICMP"})
+	return pinger
+}
+
+// pingTargets returns the targets that answered ICMP, preserving order. A nil
+// pinger returns the targets unchanged.
+func (a *App) pingTargets(ctx context.Context, pinger hostPinger, targets []PortScanTarget, timeout time.Duration) []PortScanTarget {
+	if pinger == nil || len(targets) == 0 {
+		return targets
+	}
+	timeout = pingTimeout(timeout)
+	alive := make([]bool, len(targets))
+	sem := make(chan struct{}, portPingConcurrency)
+	var wg sync.WaitGroup
+
+loop:
+	for i := range targets {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break loop
+		}
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			alive[idx] = a.hostAlive(ctx, pinger, targets[idx].Host, timeout)
+		}(i)
+	}
+	wg.Wait()
+
+	out := make([]PortScanTarget, 0, len(targets))
+	for i, ok := range alive {
+		if ok {
+			out = append(out, targets[i])
+		}
+	}
+	return out
+}
+
+// pingNetwork pings every host in network and returns those that answered, in
+// enumeration order. checked reports how many hosts were tested so the caller
+// can account for the skipped ones.
+func (a *App) pingNetwork(ctx context.Context, pinger hostPinger, network net.IPNet, timeout time.Duration) (live []string, checked uint64) {
+	timeout = pingTimeout(timeout)
+	var (
+		mu    sync.Mutex
+		found = make(map[uint64]string)
+		index uint64
+	)
+	sem := make(chan struct{}, portPingConcurrency)
+	var wg sync.WaitGroup
+
+	hostscan.Each(network, func(host string) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		at := index
+		index++
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return false
+		}
+		wg.Add(1)
+		go func(h string, slot uint64) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if a.hostAlive(ctx, pinger, h, timeout) {
+				mu.Lock()
+				found[slot] = h
+				mu.Unlock()
+			}
+		}(host, at)
+		return true
 	})
-	return nil
+	wg.Wait()
+
+	live = make([]string, 0, len(found))
+	for i := uint64(0); i < index; i++ {
+		if host, ok := found[i]; ok {
+			live = append(live, host)
+		}
+	}
+	return live, index
+}
+
+// hostAlive pings host and reports whether it should be scanned. A nil pinger
+// means the check is disabled, so the host is assumed up. An ICMP socket that
+// cannot be used keeps the host too, so a platform without ICMP still scans;
+// only a genuine timeout (or a cancelled run) drops it.
+func (a *App) hostAlive(ctx context.Context, pinger hostPinger, host string, timeout time.Duration) bool {
+	if pinger == nil {
+		return true
+	}
+	err := pinger.Ping(ctx, host, timeout)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, ping.ErrTimeout):
+		a.emit(EventPortLog, PortScanLogEvent{Level: "warn", Message: host + " did not answer ICMP · skipping"})
+		return false
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return false
+	case errors.Is(err, ping.ErrNoIPv4), errors.Is(err, ping.ErrUnavailable):
+		// Cannot verify the host over ICMP; keep it rather than skip a real one.
+		return true
+	default:
+		a.emit(EventPortLog, PortScanLogEvent{Level: "warn", Message: "ping " + host + ": " + err.Error()})
+		return false
+	}
 }
 
 // normalizePortScanTargets resolves a request into the distinct, non-empty
@@ -1523,6 +1756,11 @@ func formatPortScanReport(report PortScanReport) string {
 		probe = "enabled"
 	}
 	fmt.Fprintf(&b, "Identify:     %s\n", probe)
+	pingFirst := "disabled"
+	if report.PingFirst {
+		pingFirst = "enabled"
+	}
+	fmt.Fprintf(&b, "Ping first:   %s\n", pingFirst)
 	fmt.Fprintf(&b, "Pacing:       concurrency %d · timeout %dms\n", report.Concurrency, report.TimeoutMs)
 
 	targets := reportTargets(report)

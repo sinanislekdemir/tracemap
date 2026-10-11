@@ -40,8 +40,8 @@ the Windows zip.
   unless the user explicitly specifies the exact version to tag.
 
 > Note: `v1.0.0` was an explicit major release after `v0.5.2`; from there the
-> patch-first rule applies. The latest release is `v1.0.3`, so the next patch is
-> `v1.0.4`.
+> patch-first rule applies. Check `git tag --sort=-v:refname` for the latest tag
+> before choosing the next version.
 
 ### License & notices
 
@@ -95,6 +95,7 @@ internal/webcrawl/          browser-UA HTTP crawl (frontpage + 1 level, robots, 
 internal/scrape/            website scraper/archiver + FTS5 search store (scrape.db)
 internal/hostscan/          IPv4 CIDR enumeration + live-host discovery (TCP connect)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing + worker pool
+internal/ping/              unprivileged ICMP echo for the optional port-scan ping-first check
 internal/origin/            keyless origin discovery behind CDNs/proxies ("unmask")
 internal/netcat/            interactive TCP sessions ("nc") for floating windows
 internal/history/           saved traces/scans (SQLite snapshot store)
@@ -285,13 +286,21 @@ LICENSES/                   full LGPL-3.0 / GPL-3.0 texts (shipped + embedded)
   the port-scan results context menu offers as **Open in browser** (via
   `QDesktopServices`, so it uses the platform handler on all three OSes).
   Events: `portscan:open`, `portscan:progress`, `portscan:done`,
-  `portscan:error`; results are not persisted. `ScanPorts` owns a dedicated
-  canceler (`portOps`), so it neither stops nor is stopped by traces/scans;
-  `CancelPortScan` stops it. A request may carry multiple `Targets`
+  `portscan:error`, `portscan:log`; results are not persisted. `ScanPorts` owns a
+  dedicated canceler (`portOps`), so it neither stops nor is stopped by
+  traces/scans; `CancelPortScan` stops it. A request may carry multiple `Targets`
   (`PortScanTarget`); each is
   scanned with bounded host concurrency (`portScanHostConcurrency`), `portscan:open`
   carries the owning host/label in a `PortOpenEvent`, and the progress/done
-  events report the target index/count. `App.ExportPortScanReport` writes the
+  events report the target index/count. **Ping first** (`PortScanRequest.PingFirst`,
+  off by default) is an optional ICMP pre-check: before scanning, `internal/ping`
+  opens one unprivileged datagram ICMP socket and echoes every target
+  (`portPingConcurrency` in flight, `pingTimeout` wait), and the targets that do
+  not answer are skipped — reported through `portscan:log` and counted in
+  `PortScanDoneEvent.Skipped`. It is opt-in because a live host may block ICMP,
+  and it degrades gracefully: when the socket cannot be opened (missing
+  privileges) or a host has no IPv4 address, the check is skipped and every
+  target is scanned. `App.ExportPortScanReport` writes the
   scan context plus the collected open ports as a verbose human-readable text
   report via the native save dialog (`formatPortScanReport`, `.txt`); the
   frontend assembles a `PortScanReport` (scan options, resolved targets, timing,

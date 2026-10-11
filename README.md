@@ -83,7 +83,10 @@ highlighted as correlation points.*
   so a large block never spawns a goroutine per port. Open ports are optionally identified
   by banner grab, HTTP request and TLS handshake on TCP (server, certificate and
   ALPN), and by reply shape or printable banner on UDP (DNS, mDNS and NTP are
-  labelled); an FTP service is also checked for an anonymous login. Open ports
+  labelled); an FTP service is also checked for an anonymous login. An optional
+  **Ping first** check echoes each target with ICMP and skips the ones that do
+  not answer before any port is probed — useful for scanning a block where most
+  addresses are dead, and off by default because a live host may block ICMP. Open ports
   stream into a results table, and **Export report** writes a verbose text report
   of the scan context and every open port. The window can scan either the current
   host or **All targets** from the last scan, a whole IPv4 CIDR block, with
@@ -192,7 +195,7 @@ Qt6 window (native widgets + hand-painted offline vector map)
    │        ExportDomainReport, UnmaskTarget, UnmaskRulesPath, CreateUnmaskRules,
    │        ExportOriginReport, CheckTools, …
    │  Events (typed Go values): trace:hop, trace:geo, trace:done, scan:targets,
-   │        scan:crawlPage, scan:crawlLog, portscan:open, net:data,
+   │        scan:crawlPage, scan:crawlLog, portscan:open, portscan:log, net:data,
    │        domain:progress, origin:progress, origin:log, …
    ▼
 Go backend (in-process)
@@ -203,6 +206,7 @@ Go backend (in-process)
    ├── subdomains   local subdomain discovery (brute force, PTR, SPF/SRV)
    ├── webcrawl     browser-UA HTTP crawl (front page + 1 level, robots, sitemap)
    ├── portscan     TCP connect / UDP port scan + banner/HTTP/TLS probing
+   ├── ping         unprivileged ICMP echo (optional port-scan ping-first check)
    ├── origin       keyless origin discovery behind CDNs/proxies ("unmask")
    ├── netcat       interactive TCP sessions (optional TLS)
    ├── mapdata      embedded Natural Earth basemap + Web Mercator
@@ -426,6 +430,7 @@ internal/subdomains/        local subdomain discovery (brute force, PTR, SPF/SRV
 internal/webcrawl/          browser-UA HTTP crawl (front page + 1 level, robots, sitemap)
 internal/scrape/            website scraper/archiver + FTS5 archive search (scrape.db)
 internal/portscan/          TCP connect / UDP port scan + banner/HTTP/TLS probing
+internal/ping/              unprivileged ICMP echo for the port-scan ping-first check
 internal/origin/            keyless origin discovery behind CDNs/proxies ("unmask")
 internal/netcat/            interactive TCP sessions (optional TLS)
 internal/history/           saved traces/scans (SQLite snapshot store)
@@ -464,8 +469,9 @@ make check
   `exec` as an argument array — user input is never interpolated into a shell
   string.
 - Port scanning dials the host directly from the Go standard library; no shell
-  is involved and only open ports are reported. Scan only hosts you are
-  authorised to test.
+  is involved and only open ports are reported. The optional ping-first check
+  uses an unprivileged ICMP echo socket; nothing is escalated. Scan only hosts
+  you are authorised to test.
 - Netcat sessions open a plain TCP (or TLS) socket from the Go standard library;
   no shell is involved. TLS certificate verification is intentionally skipped
   because the goal is service identification, not trust. Connect only to hosts

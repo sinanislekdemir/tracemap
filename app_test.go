@@ -1,15 +1,143 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"traceroute/internal/ipblocks"
+	"traceroute/internal/ping"
+	"traceroute/internal/portscan"
 	"traceroute/internal/subdomains"
 	"traceroute/internal/webcrawl"
 )
+
+// fakePinger stands in for *ping.Pinger: it returns a preset error per host so
+// the ping-first filtering is tested without touching the network.
+type fakePinger struct {
+	mu    sync.Mutex
+	down  map[string]error
+	pings []string
+}
+
+func (f *fakePinger) Ping(_ context.Context, host string, _ time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pings = append(f.pings, host)
+	return f.down[host]
+}
+
+func (f *fakePinger) Close() error { return nil }
+
+func TestPingTargetsFiltersUnreachable(t *testing.T) {
+	app := &App{emit: func(string, any) {}}
+	pinger := &fakePinger{down: map[string]error{
+		"10.0.0.2": ping.ErrTimeout,
+		"10.0.0.4": ping.ErrNoIPv4, // cannot verify over ICMP; keep the host
+	}}
+	targets := []PortScanTarget{
+		{Host: "10.0.0.1"}, {Host: "10.0.0.2"}, {Host: "10.0.0.3"}, {Host: "10.0.0.4"},
+	}
+	got := app.pingTargets(context.Background(), pinger, targets, time.Second)
+	want := []string{"10.0.0.1", "10.0.0.3", "10.0.0.4"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d targets, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].Host != want[i] {
+			t.Errorf("target %d = %q, want %q", i, got[i].Host, want[i])
+		}
+	}
+}
+
+func TestHostAliveSemantics(t *testing.T) {
+	app := &App{emit: func(string, any) {}}
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{nil, true},
+		{ping.ErrTimeout, false},
+		{ping.ErrNoIPv4, true},
+		{ping.ErrUnavailable, true},
+		{errors.New("boom"), false},
+	}
+	for _, c := range cases {
+		pinger := &fakePinger{down: map[string]error{"host": c.err}}
+		if got := app.hostAlive(context.Background(), pinger, "host", time.Second); got != c.want {
+			t.Errorf("hostAlive(err=%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+	if !app.hostAlive(context.Background(), nil, "host", time.Second) {
+		t.Error("a nil pinger (check disabled) should keep the host")
+	}
+}
+
+func TestScanPortsPingFirstSkipsDeadHosts(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		logged  bool
+		done    PortScanDoneEvent
+		scanned []string
+	)
+	app := &App{
+		ctx: context.Background(),
+		emit: func(name string, payload any) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch e := payload.(type) {
+			case PortScanLogEvent:
+				logged = true
+			case PortScanDoneEvent:
+				done = e
+			case PortScanProgressEvent:
+				scanned = append(scanned, e.Host)
+			}
+		},
+		ports: &portscan.Scanner{
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, errors.New("connection refused")
+			},
+		},
+		newPinger: func() (hostPinger, error) {
+			return &fakePinger{down: map[string]error{"10.0.0.2": ping.ErrTimeout}}, nil
+		},
+	}
+
+	err := app.ScanPorts(PortScanRequest{
+		CIDR: "10.0.0.0/30", Preset: "top20", PingFirst: true, Concurrency: 4, TimeoutMs: 200,
+	})
+	if err != nil {
+		t.Fatalf("ScanPorts: %v", err)
+	}
+	if done.Targets != 1 || done.Skipped != 1 {
+		t.Errorf("done = %+v, want Targets=1 Skipped=1", done)
+	}
+	if len(scanned) != 1 || scanned[0] != "10.0.0.1" {
+		t.Errorf("scanned hosts = %v, want [10.0.0.1]", scanned)
+	}
+	if !logged {
+		t.Error("expected a portscan:log event for the skipped host")
+	}
+}
+
+func TestPingTimeout(t *testing.T) {
+	if got := pingTimeout(0); got != portPingTimeout {
+		t.Errorf("pingTimeout(0) = %s, want %s", got, portPingTimeout)
+	}
+	if got := pingTimeout(30 * time.Second); got != portPingTimeout {
+		t.Errorf("pingTimeout(30s) = %s, want the %s cap", got, portPingTimeout)
+	}
+	if got := pingTimeout(300 * time.Millisecond); got != 300*time.Millisecond {
+		t.Errorf("pingTimeout(300ms) = %s, want 300ms", got)
+	}
+}
 
 // TestSubdomainIPsNeverNull guards against emitting a nil IPs slice, which
 // JSON-encodes as null and crashes the frontend's ips.length access.
@@ -98,6 +226,7 @@ func TestFormatPortScanReport(t *testing.T) {
 		Ports:       "Top 100",
 		PortCount:   100,
 		Probe:       true,
+		PingFirst:   true,
 		Concurrency: 64,
 		TimeoutMs:   500,
 		Scanned:     100,
@@ -124,6 +253,7 @@ func TestFormatPortScanReport(t *testing.T) {
 		"Protocol:     tcp",
 		"Ports:        Top 100 (100 ports)",
 		"Identify:     enabled",
+		"Ping first:   enabled",
 		"Pacing:       concurrency 64 · timeout 500ms",
 		"web (10.0.0.1)",
 		"db (10.0.0.2)",

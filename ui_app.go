@@ -943,6 +943,12 @@ func (u *uiApp) handle(name string, payload any) {
 
 	case EventPortOpen:
 		u.onPortOpen(payload.(PortOpenEvent))
+	case EventPortLog:
+		e := payload.(PortScanLogEvent)
+		u.logLine("ports", e.Level, e.Message)
+		if u.portDlg != nil {
+			u.portDlg.log(e)
+		}
 	case EventPortProgress:
 		e := payload.(PortScanProgressEvent)
 		u.status.ShowMessage(fmt.Sprintf("ports %s %d/%d (%d open)", e.Host, e.Done, e.Total, e.Open))

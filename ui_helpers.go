@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 
 	qt "github.com/mappu/miqt/qt6"
@@ -38,4 +39,35 @@ func parseBlockTarget(input string) (cidr string, ports string, ok bool) {
 		return "", "", false
 	}
 	return block, ports, true
+}
+
+// blockHostCount parses an IPv4 CIDR block and returns the number of usable
+// host addresses it contains, formatted with thousands separators. ok is false
+// when block is not a valid CIDR, so callers can skip the label.
+func blockHostCount(block string) (string, bool) {
+	network, ok := hostscan.ParseCIDR(block)
+	if !ok {
+		return "", false
+	}
+	return formatCount(hostscan.Count(network)), true
+}
+
+// formatCount renders n with thousands separators (e.g. 16777214 ->
+// "16,777,214") so large CIDR sizes stay readable in the toolbar badge.
+func formatCount(n uint64) string {
+	s := strconv.FormatUint(n, 10)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	if pre := len(s) % 3; pre > 0 {
+		b.WriteString(s[:pre])
+	}
+	for i := len(s) % 3; i < len(s); i += 3 {
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
 }

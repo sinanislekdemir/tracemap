@@ -1905,12 +1905,15 @@ func (u *uiApp) updateBadge() {
 		u.badge.SetText("")
 		return
 	}
-	if ports == "" {
-		u.badge.SetText("PORTS · top100")
-	} else {
-		u.badge.SetText("PORTS · " + ports)
+	portsLabel := "PORTS · top100"
+	if ports != "" {
+		portsLabel = "PORTS · " + ports
 	}
-	_ = cidr
+	if count, ok := blockHostCount(cidr); ok {
+		u.badge.SetText(count + " hosts · " + portsLabel)
+		return
+	}
+	u.badge.SetText(portsLabel)
 }
 
 func (u *uiApp) show() {
